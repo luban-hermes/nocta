@@ -102,6 +102,9 @@ export async function fetchMeta(url: string): Promise<PageMeta> {
   return { ...page, title: oe.title || page.title, image: oe.image || page.image, siteName: oe.siteName || page.siteName, description: page.description || oe.description || "", type: "video", ok: page.ok || !!oe.title, error: oe.title ? undefined : page.error };
 }
 
+const BLOCKED_TITLE =
+  /^(just a moment|attention required|access denied|forbidden|403 forbidden|404 not found|error|robot check|are you a robot\??|security check|captcha|one more step|请稍候|安全验证|人机验证|验证码|出错啦|访问受限|访问被拒绝|页面不存在)[\s.!！…]*($|[|_\-–—:：])|(^|[_\s-])(验证码|captcha)([_\s-]|$)|出错啦/i;
+
 async function fetchPage(url: string): Promise<PageMeta> {
   try {
     const res = await safeFetch(url, { timeoutMs: 8000 });
@@ -109,7 +112,13 @@ async function fetchPage(url: string): Promise<PageMeta> {
     if (!/html|xml/i.test(ct) && !/^\s*</.test(res.text)) {
       return { url: res.url, title: domainOf(res.url), description: "", image: /image\//.test(ct) ? res.url : "", favicon: `${new URL(res.url).origin}/favicon.ico`, siteName: "", type: "", text: "", ok: res.status < 400 };
     }
-    return { url: res.url, ...parseHtml(res.text, res.url), ok: res.status < 400 };
+    const parsed = parseHtml(res.text, res.url);
+    // anti-bot / captcha / error interstitials (Cloudflare, bilibili, WAFs …) — keep only the favicon
+    // so the bookmark falls back to the domain instead of being named "验证码" or "Just a moment..."
+    if (BLOCKED_TITLE.test(parsed.title.trim()) || /\/(captcha|challenge|verify)(\/|\?|$)/i.test(new URL(res.url).pathname)) {
+      return { url, title: "", description: "", image: "", favicon: parsed.favicon, siteName: "", type: "", text: "", ok: false, error: `blocked: ${parsed.title.slice(0, 60)}` };
+    }
+    return { url: res.url, ...parsed, ok: res.status < 400 };
   } catch (e) {
     const u = new URL(url);
     return {
