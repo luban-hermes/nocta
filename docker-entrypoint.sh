@@ -9,8 +9,16 @@ if [ "$(id -u)" = "0" ]; then
   exec su-exec nocta "$0" "$@"
 fi
 
+if [ ! -w /app/data ]; then
+  echo "[nocta] ERROR: /app/data is not writable by uid $(id -u). Fix the volume's ownership" >&2
+  echo "        (e.g. chown -R $(id -u):$(id -g) ./data) or start the container without --user." >&2
+  exit 1
+fi
+
 if [ -z "$ADMIN_PASSWORD" ]; then
   echo "[nocta] WARNING: ADMIN_PASSWORD is not set — nobody can sign in to 夜航后台." >&2
+elif [ "$ADMIN_PASSWORD" = "change-me" ]; then
+  echo "[nocta] WARNING: ADMIN_PASSWORD is still the example value 'change-me' — sign-in stays disabled until you change it." >&2
 fi
 
 echo "[nocta] applying database migrations…"

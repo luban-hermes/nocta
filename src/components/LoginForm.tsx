@@ -33,7 +33,7 @@ export function LoginForm({ next, configured, publicMode }: { next: string; conf
         </div>
         <h1 style={{ fontSize: 20, fontWeight: 600 }}>管理员登录</h1>
         <p className="sub" style={{ fontSize: 13, color: "var(--text3)", margin: "6px 0 18px" }}>
-          {configured ? "输入 ADMIN_PASSWORD 中设置的密码。" : "服务器尚未设置 ADMIN_PASSWORD 环境变量，请先设置后重启。"}
+          {configured ? "输入 ADMIN_PASSWORD 中设置的密码。" : "服务器尚未设置 ADMIN_PASSWORD（或仍是示例值 change-me），请改成你自己的密码后重启。"}
         </p>
         <Input type="password" value={pw} onChange={(e) => setPw(e.target.value)} placeholder="密码" autoFocus autoComplete="current-password" aria-label="密码" disabled={!configured} />
         <p className="f-err" role="alert" style={{ margin: "8px 2px" }}>{err}</p>

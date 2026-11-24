@@ -58,7 +58,9 @@ export async function canView() {
 }
 
 export function cookieOptions(req: Request) {
-  const proto = req.headers.get("x-forwarded-proto") ?? new URL(req.url).protocol.replace(":", "");
+  // proxies may chain values ("https, http"): the first one is what the browser used
+  const fwd = req.headers.get("x-forwarded-proto")?.split(",")[0].trim().toLowerCase();
+  const proto = fwd || new URL(req.url).protocol.replace(":", "");
   const secure = process.env.COOKIE_SECURE ? /^(1|true)$/i.test(process.env.COOKIE_SECURE) : proto === "https";
   return { httpOnly: true, sameSite: "lax" as const, secure, path: "/", maxAge: MAX_AGE };
 }

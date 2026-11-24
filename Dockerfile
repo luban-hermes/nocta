@@ -26,10 +26,15 @@ RUN PV="$(node -p "require('/tmp/package.json').dependencies.prisma")" \
  && npm install --omit=dev --no-audit --no-fund "prisma@${PV}"
 
 FROM node:20-alpine AS runner
-RUN apk add --no-cache openssl su-exec tini wget
+# busybox already ships wget (used by the healthcheck)
+RUN apk add --no-cache openssl su-exec tini
 WORKDIR /app
+# CHECKPOINT_DISABLE / PRISMA_HIDE_UPDATE_MESSAGE: no Prisma telemetry or update check at start-up
+# (offline / firewalled hosts would otherwise wait on it)
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
+    CHECKPOINT_DISABLE=1 \
+    PRISMA_HIDE_UPDATE_MESSAGE=1 \
     PORT=3000 \
     HOSTNAME=0.0.0.0 \
     DATABASE_URL=file:/app/data/nocta.db
@@ -42,12 +47,20 @@ COPY --from=builder --chown=nocta:nocta /app/prisma ./prisma
 COPY --from=builder --chown=nocta:nocta /app/agent ./agent
 COPY --from=prisma-cli /opt/prisma-cli/node_modules /opt/prisma-cli/node_modules
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh && mkdir -p /app/data && chown nocta:nocta /app/data
+# trim what the standalone server never loads: sharp/libvips (images are unoptimized), the
+# TypeScript compiler (traced only because of next.config.ts) and the Prisma engine of the other arch
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh && mkdir -p /app/data && chown nocta:nocta /app/data \
+ && rm -rf /app/node_modules/sharp /app/node_modules/@img /app/node_modules/typescript \
+ && case "$(uname -m)" in \
+      aarch64) rm -f /app/node_modules/.prisma/client/libquery_engine-linux-musl-openssl-3.0.x.so.node ;; \
+      x86_64)  rm -f /app/node_modules/.prisma/client/libquery_engine-linux-musl-arm64-openssl-3.0.x.so.node ;; \
+    esac \
+ && ls /app/node_modules/.prisma/client/libquery_engine-linux-musl*.so.node
 
 VOLUME ["/app/data"]
 EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD wget -qO- http://127.0.0.1:3000/api/health >/dev/null || exit 1
+  CMD wget -qO- "http://127.0.0.1:${PORT:-3000}/api/health" >/dev/null || exit 1
 
 ENTRYPOINT ["/sbin/tini", "--", "docker-entrypoint.sh"]
 CMD ["node", "server.js"]

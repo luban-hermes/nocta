@@ -130,7 +130,7 @@ export function ContentCard({ c, index, onOpen }: { c: ContentDTO; index: number
           <Tile src={c.favicon} name={c.domain} size="xs" />
           <span className="dom">{c.domain}</span>
           <span className="sep">·</span>
-          <span>{ago(c.createdAt)}</span>
+          <span suppressHydrationWarning>{ago(c.createdAt)}</span>
           <span className={cn("unread", c.read && "off")} title={c.read ? "已读" : "未读"} />
         </div>
       </div>

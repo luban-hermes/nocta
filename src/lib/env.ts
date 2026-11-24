@@ -2,8 +2,13 @@
 const bool = (v: string | undefined, d: boolean) => (v == null || v === "" ? d : /^(1|true|yes|on)$/i.test(v));
 
 export const env = {
+  /** the admin password; the placeholder from .env.example counts as "not set" so it can never be used to sign in */
   get adminPassword() {
-    return process.env.ADMIN_PASSWORD ?? "";
+    const v = process.env.ADMIN_PASSWORD ?? "";
+    return v === "change-me" ? "" : v;
+  },
+  get adminPasswordIsPlaceholder() {
+    return process.env.ADMIN_PASSWORD === "change-me";
   },
   get sessionSecret() {
     return process.env.SESSION_SECRET ?? "";

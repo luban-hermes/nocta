@@ -33,7 +33,8 @@
 docker run -d --name nocta \
   -p 3000:3000 \
   -v $(pwd)/data:/app/data \
-  -e ADMIN_PASSWORD=change-me \
+  -e ADMIN_PASSWORD='换成你自己的密码' \
+  -e TZ=Asia/Shanghai \
   --restart unless-stopped \
   ghcr.io/luban-hermes/nocta:latest
 ```
@@ -51,13 +52,15 @@ docker compose up -d
 
 镜像支持 `linux/amd64` 与 `linux/arm64`（树莓派、Apple Silicon、ARM 云主机）。容器以非 root 用户运行，启动时自动执行 `prisma migrate deploy`。
 
-> 放在 HTTPS 反向代理（Caddy / Nginx / Traefik）后面时，请确保代理传递 `X-Forwarded-Proto`，或设置 `COOKIE_SECURE=true`。
+> 放在 HTTPS 反向代理（Caddy / Nginx / Traefik / Cloudflare Tunnel）后面时，请确保代理传递 `X-Forwarded-Proto`，或设置 `COOKIE_SECURE=true`。直接用 `http://局域网IP:3000` 访问时 Cookie 不带 `Secure`，登录照常可用——此时不要设置 `COOKIE_SECURE=true`。
+>
+> `ADMIN_PASSWORD` 保持示例值 `change-me` 时登录会被禁用，请务必改成你自己的密码。若用 `--user` 指定 uid 运行，请先让 `./data` 归该 uid 所有。
 
 ## 环境变量
 
 | 变量 | 默认值 | 说明 |
 |---|---|---|
-| `ADMIN_PASSWORD` | —（必填） | 后台登录密码。修改后旧会话自动失效 |
+| `ADMIN_PASSWORD` | —（必填） | 后台登录密码。修改后旧会话自动失效；示例值 `change-me` 视为未设置 |
 | `SESSION_SECRET` | 由密码派生 | 会话 Cookie 签名密钥（可选） |
 | `PUBLIC_MODE` | `true` | `true` 访客可浏览导航与收藏；`false` 全站需要登录 |
 | `PUBLIC_MONITORS` | `false` | 访客是否可见「服务监控」（会暴露主机与 URL） |
@@ -69,7 +72,8 @@ docker compose up -d
 | `MONITOR_RETENTION_DAYS` | `7` | 检查记录 / 服务器指标保留天数 |
 | `ALLOW_PRIVATE_MONITORS` | `true` | 允许 HTTP 监控内网地址（家庭实验室常用）。书签抓取始终拒绝内网 |
 | `COOKIE_SECURE` | 自动 | 强制 Cookie `Secure` 标记 |
-| `PORT` | `3000` | 监听端口 |
+| `PORT` | `3000` | 监听端口（健康检查跟随此值） |
+| `TZ` | `UTC` | 容器时区，如 `Asia/Shanghai`（只影响服务端日志；页面上的时间按浏览器时区显示） |
 
 AI 示例：
 

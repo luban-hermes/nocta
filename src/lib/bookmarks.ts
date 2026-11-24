@@ -22,11 +22,16 @@ export const DEFAULT_CATEGORIES = {
   ],
 } as const;
 
-/** create the default categories the first time the app starts (idempotent) */
+/**
+ * create the default categories the first time the app starts (idempotent). A kind that already
+ * has items is left alone, so categories the admin deleted on purpose do not come back on restart.
+ */
 export async function ensureDefaultCategories() {
   for (const kind of ["site", "content"] as const) {
     const n = await prisma.category.count({ where: { kind } });
     if (n > 0) continue;
+    const items = kind === "site" ? await prisma.site.count() : await prisma.content.count();
+    if (items > 0) continue;
     await prisma.category.createMany({
       data: DEFAULT_CATEGORIES[kind].map((c, i) => ({ kind, name: c.name, icon: c.icon, sort: i })),
     });

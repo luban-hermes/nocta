@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db";
-import { isAdmin } from "@/lib/auth";
+import { canView, isAdmin } from "@/lib/auth";
 import { chatJSON } from "@/lib/ai";
 import { addByUrl } from "@/lib/bookmarks";
 import { contentDTO, monitorDTO, siteDTO } from "@/lib/data";
@@ -48,8 +48,7 @@ function rulePlan(text: string): Plan {
       return { action: "add_bookmark", url: u.toString() };
     }
   }
-  const q = t.replace(/^(搜索|查找|找一下|找|search|find)\s*/i, "").trim();
-  return { action: "search", query: q };
+  return { action: "search", query: searchTerms(t) };
 }
 
 async function aiPlan(text: string): Promise<Plan | null> {
@@ -70,12 +69,26 @@ async function aiPlan(text: string): Promise<Plan | null> {
   return out;
 }
 
-async function search(q: string) {
+/** strip conversational filler so "帮我找一下开发相关的网站" searches for "开发" */
+function searchTerms(t: string) {
+  return t
+    .replace(/^(请|帮我|麻烦|给我|我想|我要)+\s*/, "")
+    .replace(/^(搜索|搜一下|搜|查找|查一下|查|找一下|找找|找|看看|列出|显示|search|find|show)\s*/i, "")
+    .replace(/^(一下|所有|全部|我的|有没有|有哪些)+\s*/, "")
+    .replace(/\s*(相关|有关|类|方面)?的?(网站|站点|网址|内容|文章|收藏|书签|视频|仓库|监控|服务器|记录|东西)?\s*(吗|呢|吧)?[?？。!！]*$/i, "")
+    .trim();
+}
+
+async function search(q: string, withMonitors: boolean) {
   if (!q) return { sites: [], contents: [], monitors: [] };
+  // a query that names a category ("开发", "AI 工具") also returns everything filed under it
+  const cats = await prisma.category.findMany({ where: { name: { contains: q } }, select: { id: true } });
+  const catIds = cats.map((c) => c.id);
+  const inCat = catIds.length ? [{ categoryId: { in: catIds } }] : [];
   const [sites, contents, monitors] = await Promise.all([
-    prisma.site.findMany({ where: { OR: [{ name: { contains: q } }, { url: { contains: q } }, { description: { contains: q } }] }, take: 5 }),
-    prisma.content.findMany({ where: { OR: [{ title: { contains: q } }, { summary: { contains: q } }, { tags: { contains: q } }, { domain: { contains: q } }] }, take: 5 }),
-    prisma.monitor.findMany({ where: { OR: [{ name: { contains: q } }, { url: { contains: q } }, { host: { contains: q } }] }, take: 5 }),
+    prisma.site.findMany({ where: { OR: [{ name: { contains: q } }, { url: { contains: q } }, { description: { contains: q } }, ...inCat] }, take: 8 }),
+    prisma.content.findMany({ where: { OR: [{ title: { contains: q } }, { summary: { contains: q } }, { tags: { contains: q } }, { domain: { contains: q } }, ...inCat] }, take: 8 }),
+    withMonitors ? prisma.monitor.findMany({ where: { OR: [{ name: { contains: q } }, { url: { contains: q } }, { host: { contains: q } }] }, take: 5 }) : Promise.resolve([]),
   ]);
   return { sites: sites.map(siteDTO), contents: contents.map(contentDTO), monitors: monitors.map((m) => monitorDTO(m)) };
 }
@@ -86,9 +99,14 @@ export async function POST(req: Request) {
   const { message } = await body<{ message?: string }>(req);
   const text = (message ?? "").trim().slice(0, 2000);
   if (!text) return fail("说点什么吧");
+  // same visibility rules as the rest of the app: private instances need a login, and visitors
+  // never see monitors (hosts / IPs) unless PUBLIC_MONITORS is on
+  if (!(await canView())) return fail("需要登录", 401);
   const admin = await isAdmin();
+  const withMonitors = admin || env.publicMonitors;
 
-  let plan = env.aiEnabled ? await aiPlan(text) : null;
+  // only the admin spends AI tokens; anonymous visitors get the rule-based planner
+  let plan = env.aiEnabled && admin ? await aiPlan(text) : null;
   const rules = rulePlan(text);
   // trust the rules for unambiguous inputs (SSH strings / bare URLs); otherwise prefer the AI
   if (!plan || ((rules.action === "monitor_server" || rules.action === "monitor_http") && plan.action !== rules.action && !plan.host && !plan.url)) plan = rules;
@@ -130,8 +148,8 @@ export async function POST(req: Request) {
         });
       }
       case "search": {
-        const q = plan.query || text;
-        const r = await search(q);
+        const q = searchTerms(plan.query || text) || plan.query || text;
+        const r = await search(q, withMonitors);
         const n = r.sites.length + r.contents.length + r.monitors.length;
         return json({ action: "search", reply: n ? `找到 ${n} 条与「${q}」相关的记录：` : `没有找到与「${q}」相关的记录。\n\n${HELP}`, results: r });
       }
