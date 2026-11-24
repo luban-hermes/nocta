@@ -1,19 +1,88 @@
-import type { SVGProps } from "react";
+"use client";
+import {
+  Activity, AlertTriangle, Archive, ArrowDown, ArrowLeft, ArrowLeftRight, ArrowUp, Book, BookOpen, Bookmark, Bot, Box, Briefcase, Calendar, Camera, Check, ChevronDown, ChevronLeft,
+  ChevronRight, CircleAlert, CircleCheck, Clock, Cloud, Code, Coffee, Compass, Copy, Cpu, Database, Download, ExternalLink, Eye, EyeOff, FileText, Film, Flag, Folder, FolderInput, Gamepad2,
+  Gift, GitBranch, Globe, GraduationCap, GripVertical, HardDrive, Hash, Heart, House, Image as ImageI, Inbox, Info, KeyRound, Layers, LayoutGrid, Lightbulb, Link, LogOut, Mail, Map as MapI, MessageSquareQuote,
+  Monitor, Moon, Music, Network, Newspaper, Palette, PenTool, Pencil, Pin, PinOff, Play, Plus, RefreshCw, RotateCcw, Rss, Search, Send, Server, Settings, ShieldCheck, ShoppingBag,
+  Sparkles, Star, Sun, Terminal, Trash2, Upload, Users, Video, Wrench, X, Zap, type LucideIcon, type LucideProps,
+} from "lucide-react";
 
-type P = SVGProps<SVGSVGElement> & { size?: number };
-const base = ({ size = 18, ...p }: P) => ({ width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round" as const, strokeLinejoin: "round" as const, "aria-hidden": true, ...p });
+/* UI icons come from lucide-react (no text glyphs). Names kept from the old hand-drawn set. */
+type P = LucideProps & { size?: number };
+const mk = (I: LucideIcon, d: number, sw = 2) => {
+  const C = ({ size = d, strokeWidth = sw, ...p }: P) => <I size={size} strokeWidth={strokeWidth} aria-hidden="true" {...p} />;
+  return C;
+};
+export const SearchIcon = mk(Search, 18);
+export const MoonIcon = mk(Moon, 18);
+export const SunIcon = mk(Sun, 18);
+export const CloseIcon = mk(X, 16, 2.2);
+export const SparkIcon = mk(Sparkles, 18);
+export const ArrowUpIcon = mk(ArrowUp, 18, 2.2);
+export const ArrowDownIcon = mk(ArrowDown, 12, 2.2);
+export const SendIcon = mk(Send, 18);
+export const PinIcon = mk(Pin, 12, 2.2);
+export const PinOffIcon = mk(PinOff, 16);
+export const TrashIcon = mk(Trash2, 15);
+export const CopyIcon = mk(Copy, 15);
+export const PlayIcon = ({ size = 22 }: { size?: number }) => <Play size={size} fill="#fff" stroke="none" aria-hidden="true" />;
+export const ChevronDownIcon = mk(ChevronDown, 16);
+export const ChevronRightIcon = mk(ChevronRight, 15);
+export const ChevronLeftIcon = mk(ChevronLeft, 15);
+export const CheckIcon = mk(Check, 15, 2.4);
+export const ExternalIcon = mk(ExternalLink, 15);
+export const OpenIcon = mk(Globe, 15);
+export const EditIcon = mk(Pencil, 15);
+export const MoveIcon = mk(FolderInput, 15);
+export const RefreshIcon = mk(RefreshCw, 15);
+export const LinkIcon = mk(Link, 15);
+export const GripIcon = mk(GripVertical, 16);
+export const PlusIcon = mk(Plus, 16, 2.4);
+export const BackIcon = mk(ArrowLeft, 15);
+export const ArrowLeftIcon = BackIcon;
+export const OkIcon = mk(CircleCheck, 16);
+export const ErrIcon = mk(CircleAlert, 16);
+export const InfoIcon = mk(Info, 16);
+export const WarnIcon = mk(AlertTriangle, 13);
+export const UploadIcon = mk(Upload, 15);
+export const SettingsIcon = mk(Settings, 16);
+export const LogoutIcon = mk(LogOut, 15);
+export const KeyIcon = mk(KeyRound, 15);
+export const ShieldIcon = mk(ShieldCheck, 15);
+export const CloudIcon = mk(Cloud, 15);
+export const DownloadIcon = mk(Download, 15);
+export const RestoreIcon = mk(RotateCcw, 15);
+export const EyeIcon = mk(Eye, 15);
+export const EyeOffIcon = mk(EyeOff, 15);
+export const ArchiveIcon = mk(Archive, 15);
 
-export const SearchIcon = (p: P) => (<svg {...base(p)}><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>);
-export const MoonIcon = (p: P) => (<svg {...base(p)}><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" /></svg>);
-export const SunIcon = (p: P) => (<svg {...base(p)}><circle cx="12" cy="12" r="4.5" /><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" /></svg>);
-export const CloseIcon = (p: P) => (<svg {...base({ strokeWidth: 2.2, size: 16, ...p })}><path d="M6 6l12 12M18 6 6 18" /></svg>);
-export const SparkIcon = (p: P) => (<svg {...base(p)}><path d="M12 3l2.2 5.8L20 11l-5.8 2.2L12 19l-2.2-5.8L4 11l5.8-2.2z" /></svg>);
-export const ArrowUpIcon = (p: P) => (<svg {...base({ strokeWidth: 2.2, ...p })}><path d="M12 19V5M5 12l7-7 7 7" /></svg>);
-export const SendIcon = (p: P) => (<svg {...base({ strokeWidth: 2.2, ...p })}><path d="M5 12h14M13 6l6 6-6 6" /></svg>);
-export const DotsIcon = (p: P) => (<svg {...base({ size: 16, ...p })}><circle cx="5" cy="12" r="1.2" /><circle cx="12" cy="12" r="1.2" /><circle cx="19" cy="12" r="1.2" /></svg>);
-export const PinIcon = (p: P) => (<svg {...base({ size: 11, fill: "currentColor", stroke: "none", ...p })}><path d="M15 3l6 6-3 1-3.5 3.5L14 18l-2 2-4-4-4.5 4.5L3 20l4.5-4.5-4-4 2-2 4.5-.5L13.5 6z" /></svg>);
-export const UpIcon = (p: P) => (<svg {...base({ size: 15, ...p })}><path d="m6 15 6-6 6 6" /></svg>);
-export const DownIcon = (p: P) => (<svg {...base({ size: 15, ...p })}><path d="m6 9 6 6 6-6" /></svg>);
-export const TrashIcon = (p: P) => (<svg {...base({ size: 15, ...p })}><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3" /></svg>);
-export const CopyIcon = (p: P) => (<svg {...base({ size: 15, ...p })}><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h10" /></svg>);
-export const PlayIcon = (p: P) => (<svg {...base({ size: 22, fill: "#fff", stroke: "none", ...p })}><path d="M8 5v14l11-7z" /></svg>);
+/* ---------- category icons: stored as lucide names; legacy text glyphs are mapped ---------- */
+export const CATEGORY_ICONS: Record<string, LucideIcon> = {
+  star: Star, code: Code, palette: Palette, sparkles: Sparkles, play: Play, film: Film, music: Music, video: Video, "file-text": FileText, newspaper: Newspaper, book: Book,
+  "book-open": BookOpen, bookmark: Bookmark, "git-branch": GitBranch, terminal: Terminal, database: Database, server: Server, cloud: Cloud, cpu: Cpu, bot: Bot, wrench: Wrench,
+  "message-square-quote": MessageSquareQuote, clock: Clock, calendar: Calendar, globe: Globe, compass: Compass, map: MapI, house: House, briefcase: Briefcase, "graduation-cap": GraduationCap,
+  "shopping-bag": ShoppingBag, "gamepad-2": Gamepad2, image: ImageI, camera: Camera, "pen-tool": PenTool, heart: Heart, coffee: Coffee, gift: Gift, flag: Flag, lightbulb: Lightbulb,
+  zap: Zap, users: Users, mail: Mail, rss: Rss, box: Box, folder: Folder, hash: Hash, "hard-drive": HardDrive, network: Network, activity: Activity, monitor: Monitor,
+  layers: Layers, inbox: Inbox, "layout-grid": LayoutGrid, "arrow-left-right": ArrowLeftRight, "triangle-alert": AlertTriangle,
+};
+export const CATEGORY_ICON_LABELS: Record<string, string> = {
+  star: "星标", code: "代码", palette: "设计", sparkles: "AI", play: "播放", film: "电影", music: "音乐", video: "视频", "file-text": "文章", newspaper: "新闻", book: "书",
+  "book-open": "阅读", bookmark: "书签", "git-branch": "仓库", terminal: "终端", database: "数据库", server: "服务器", cloud: "云", cpu: "硬件", bot: "机器人", wrench: "工具",
+  "message-square-quote": "帖子", clock: "稍后", calendar: "日历", globe: "网站", compass: "发现", map: "地图", house: "生活", briefcase: "工作", "graduation-cap": "学习",
+  "shopping-bag": "购物", "gamepad-2": "游戏", image: "图片", camera: "摄影", "pen-tool": "创作", heart: "收藏", coffee: "休闲", gift: "礼物", flag: "旗标", lightbulb: "灵感",
+  zap: "效率", users: "社区", mail: "邮件", rss: "订阅", box: "资源", folder: "文件夹", hash: "话题", "hard-drive": "存储", network: "网络", activity: "监控", monitor: "显示器",
+  layers: "全部", inbox: "收件箱", "layout-grid": "导航",
+};
+
+export const LEGACY_GLYPHS: Record<string, string> = {
+  "★": "star", "⌘": "code", "◐": "palette", "✦": "sparkles", "▶": "play", "¶": "file-text", "⌥": "git-branch", "❝": "message-square-quote", "◷": "clock",
+  "◎": "layers", "∅": "inbox", "▤": "server", "⇄": "arrow-left-right", "⚠": "triangle-alert", "•": "folder",
+};
+export const resolveCatIcon = (name: string | undefined | null) => {
+  const k = (name ?? "").trim();
+  return CATEGORY_ICONS[k] ?? CATEGORY_ICONS[LEGACY_GLYPHS[k] ?? ""] ?? Folder;
+};
+export function CatIcon({ name, size = 16 }: { name?: string | null; size?: number }) {
+  const I = resolveCatIcon(name);
+  return <I size={size} strokeWidth={1.9} aria-hidden="true" />;
+}

@@ -1,22 +1,25 @@
 "use client";
 import { motion } from "framer-motion";
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
-import type { AppData, CategoryDTO } from "@/lib/types";
-import { api } from "@/lib/client";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import type { AppData, CategoryDTO, ContentDTO, SiteDTO } from "@/lib/types";
+import { api, copyText } from "@/lib/client";
 import { cn } from "@/lib/utils";
 import { Starfield } from "./Starfield";
 import { ThemeToggle } from "./ThemeToggle";
-import { ToastProvider } from "./ui/toast";
+import { UIProvider, useDialog } from "./ui/dialog";
+import { useToast } from "./ui/toast";
+import { ContextMenu, type MenuItem, type MenuState } from "./ui/context-menu";
+import { SortItem, SortList, type HandleProps } from "./ui/sortable";
 import { ContentCard, MonitorCard, SiteCard } from "./Cards";
 import { Drawer, type DrawerTarget } from "./Drawer";
 import { CommandPalette } from "./CommandPalette";
 import { AddDialog } from "./AddDialog";
 import { Assistant } from "./Assistant";
-import { ArrowUpIcon, SearchIcon } from "./Icons";
+import { ArrowUpIcon, CatIcon, CopyIcon, EditIcon, ExternalIcon, MoveIcon, OpenIcon, PinIcon, PinOffIcon, PlusIcon, RefreshIcon, SearchIcon, SparkIcon, TrashIcon } from "./Icons";
 
 type Tab = "sites" | "contents" | "monitors";
-type RailItem = { id: string; name: string; icon: string; n: number };
+type RailItem = { id: string; name: string; icon: string; n: number; sortable?: boolean };
 
 export function BrandOrb() {
   return (
@@ -28,13 +31,52 @@ export function BrandOrb() {
 
 export function NoctaApp({ initial }: { initial: AppData }) {
   return (
-    <ToastProvider>
+    <UIProvider>
       <App initial={initial} />
-    </ToastProvider>
+    </UIProvider>
+  );
+}
+
+/** keep the relative order of the items outside `subset` and put the subset's new order into its old slots */
+function mergeOrder(all: string[], subsetNew: string[]) {
+  const set = new Set(subsetNew);
+  let k = 0;
+  return all.map((id) => (set.has(id) ? subsetNew[k++] : id));
+}
+function applyOrder<T extends { id: string; sort: number; pinned?: boolean }>(list: T[], ids: string[]) {
+  const at = new Map(ids.map((id, i) => [id, i]));
+  return list
+    .map((x) => ({ ...x, sort: at.get(x.id) ?? x.sort }))
+    .sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned) || a.sort - b.sort);
+}
+
+/** masonry in reading order: items go round-robin into as many columns as fit (no empty columns on wide screens) */
+function Masonry({ count, min = 290, gap = 16, children }: { count: number; min?: number; gap?: number; children: (i: number) => ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [cols, setCols] = useState(3);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const fit = () => setCols(Math.max(1, Math.floor((el.clientWidth + gap) / (min + gap))));
+    fit();
+    const ro = new ResizeObserver(fit);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [min, gap]);
+  return (
+    <div ref={ref} className="masonry" style={{ gap }}>
+      {Array.from({ length: cols }, (_, c) => (
+        <div key={c} className="mcol" style={{ gap }}>
+          {Array.from({ length: Math.ceil((count - c) / cols) }, (_, r) => children(r * cols + c))}
+        </div>
+      ))}
+    </div>
   );
 }
 
 function App({ initial }: { initial: AppData }) {
+  const toast = useToast();
+  const dialog = useDialog();
   const [data, setData] = useState<AppData>(initial);
   const [tab, setTab] = useState<Tab>("sites");
   const [cat, setCat] = useState<Record<Tab, string>>({ sites: "all", contents: "all", monitors: "all" });
@@ -44,6 +86,9 @@ function App({ initial }: { initial: AppData }) {
   const [chat, setChat] = useState(false);
   const [showTop, setShowTop] = useState(false);
   const [isMac, setIsMac] = useState(true);
+  const [menu, setMenu] = useState<MenuState>(null);
+  const closeMenu = useCallback(() => setMenu(null), []);
+  const admin = data.admin;
 
   const refresh = useCallback(async () => {
     try {
@@ -56,7 +101,7 @@ function App({ initial }: { initial: AppData }) {
   // polling: monitors every 15s while that tab is visible, everything else every 60s
   useEffect(() => {
     const ms = tab === "monitors" ? 15000 : 60000;
-    const t = setInterval(() => !document.hidden && refresh(), ms);
+    const t = setInterval(() => !document.hidden && !document.body.classList.contains("is-sorting") && refresh(), ms);
     const onVis = () => !document.hidden && refresh();
     document.addEventListener("visibilitychange", onVis);
     return () => {
@@ -98,18 +143,18 @@ function App({ initial }: { initial: AppData }) {
 
   const rail: RailItem[] = useMemo(() => {
     const mk = (cats: CategoryDTO[], total: number, uncategorized: number): RailItem[] => [
-      { id: "all", name: "全部", icon: "◎", n: total },
-      ...cats.map((c) => ({ id: c.id, name: c.name, icon: c.icon || "•", n: c.count })),
-      ...(uncategorized ? [{ id: "none", name: "未分类", icon: "∅", n: uncategorized }] : []),
+      { id: "all", name: "全部", icon: "layers", n: total },
+      ...cats.map((c) => ({ id: c.id, name: c.name, icon: c.icon, n: c.count, sortable: true })),
+      ...(uncategorized ? [{ id: "none", name: "未分类", icon: "inbox", n: uncategorized }] : []),
     ];
     if (tab === "sites") return mk(siteCats, data.sites.length, data.sites.filter((s) => !s.categoryId).length);
     if (tab === "contents") return mk(contentCats, data.contents.length, data.contents.filter((s) => !s.categoryId).length);
     const ms = data.monitors;
     return [
-      { id: "all", name: "全部", icon: "◎", n: ms.length },
-      { id: "server", name: "服务器", icon: "▤", n: ms.filter((m) => m.kind === "server").length },
-      { id: "http", name: "API · 服务", icon: "⇄", n: ms.filter((m) => m.kind === "http").length },
-      { id: "bad", name: "异常", icon: "⚠", n: ms.filter((m) => m.status === "down" || m.status === "warn").length },
+      { id: "all", name: "全部", icon: "layers", n: ms.length },
+      { id: "server", name: "服务器", icon: "server", n: ms.filter((m) => m.kind === "server").length },
+      { id: "http", name: "API · 服务", icon: "globe", n: ms.filter((m) => m.kind === "http").length },
+      { id: "bad", name: "异常", icon: "triangle-alert", n: ms.filter((m) => m.status === "down" || m.status === "warn").length },
     ];
   }, [tab, data, siteCats, contentCats]);
 
@@ -141,6 +186,110 @@ function App({ initial }: { initial: AppData }) {
     if (el && el.getBoundingClientRect().top < 0) el.scrollIntoView({ behavior: "smooth" });
   };
 
+  /* ---------- drag to reorder (admin): optimistic, then persisted ---------- */
+  const persist = async (kind: "site" | "content" | "category", ids: string[]) => {
+    try {
+      await api("/api/reorder", { body: { kind, ids } });
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "排序保存失败", "error");
+      await refresh();
+    }
+  };
+  const reorderSites = (subset: string[]) => {
+    const ids = mergeOrder(data.sites.map((x) => x.id), subset);
+    setData((d) => ({ ...d, sites: applyOrder(d.sites, ids) }));
+    void persist("site", ids);
+  };
+  const reorderContents = (subset: string[]) => {
+    const ids = mergeOrder(data.contents.map((x) => x.id), subset);
+    setData((d) => ({ ...d, contents: applyOrder(d.contents, ids) }));
+    void persist("content", ids);
+  };
+  const reorderCats = (kind: "site" | "content", ids: string[]) => {
+    setData((d) => {
+      const mine = applyOrder(d.categories.filter((c) => c.kind === kind), ids);
+      const other = d.categories.filter((c) => c.kind !== kind);
+      return { ...d, categories: kind === "site" ? [...other, ...mine] : [...mine, ...other] };
+    });
+    void persist("category", ids);
+  };
+
+  /* ---------- context menu ---------- */
+  const act = async (fn: () => Promise<unknown>, ok: string) => {
+    try {
+      await fn();
+      await refresh();
+      toast(ok);
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "操作失败", "error");
+    }
+  };
+  const copyLink = (url: string) => copyText(url).then((ok) => toast(ok ? "链接已复制" : "复制失败", ok ? "ok" : "error"));
+  const moveItems = (kind: "site" | "content", id: string, currentCat: string | null): MenuItem => ({
+    key: "move",
+    label: "移动到分类",
+    icon: <MoveIcon />,
+    submenu: {
+      title: "移动到分类",
+      items: [
+        ...(kind === "site" ? siteCats : contentCats).map((c) => ({
+          key: c.id,
+          label: c.name,
+          icon: <CatIcon name={c.icon} size={15} />,
+          checked: currentCat === c.id,
+          onSelect: () => currentCat !== c.id && act(() => api(`/api/${kind === "site" ? "sites" : "contents"}/${id}`, { method: "PATCH", body: { categoryId: c.id } }), `已移动到「${c.name}」`),
+        })),
+        { key: "none", label: "未分类", icon: <CatIcon name="inbox" size={15} />, checked: !currentCat, onSelect: () => currentCat && act(() => api(`/api/${kind === "site" ? "sites" : "contents"}/${id}`, { method: "PATCH", body: { categoryId: null } }), "已移到未分类") },
+      ],
+    },
+  });
+  const siteMenu = (s: SiteDTO) => (x: number, y: number) => {
+    const items: MenuItem[] = [
+      { key: "open", label: "打开", icon: <OpenIcon />, onSelect: () => location.assign(s.url) },
+      { key: "tab", label: "在新标签页打开", icon: <ExternalIcon />, onSelect: () => window.open(s.url, "_blank", "noopener") },
+      { key: "copy", label: "复制链接", icon: <CopyIcon />, onSelect: () => copyLink(s.url) },
+    ];
+    if (admin)
+      items.push(
+        { sep: true, key: "s1" },
+        { key: "edit", label: "编辑", icon: <EditIcon />, onSelect: () => setDrawer({ type: "site", id: s.id, edit: true }) },
+        { key: "pin", label: s.pinned ? "取消置顶" : "置顶", icon: s.pinned ? <PinOffIcon /> : <PinIcon size={15} />, onSelect: () => act(() => api(`/api/sites/${s.id}`, { method: "PATCH", body: { pinned: !s.pinned } }), s.pinned ? "已取消置顶" : "已置顶") },
+        moveItems("site", s.id, s.categoryId),
+        { key: "icon", label: "重新抓取图标", icon: <RefreshIcon />, onSelect: () => act(() => api(`/api/icon/site/${s.id}`, { body: { refetch: true } }), "已重新抓取图标") },
+        { sep: true, key: "s2" },
+        { key: "del", label: "删除", icon: <TrashIcon />, danger: true, onSelect: async () => (await dialog.confirm({ title: `删除站点「${s.name}」？`, message: "删除后无法恢复。", danger: true })) && act(() => api(`/api/sites/${s.id}`, { method: "DELETE" }), "已删除") },
+      );
+    setMenu({ x, y, title: s.name, items });
+  };
+  const contentMenu = (c: ContentDTO) => (x: number, y: number) => {
+    const items: MenuItem[] = [
+      { key: "open", label: "打开原文", icon: <OpenIcon />, onSelect: () => location.assign(c.url) },
+      { key: "tab", label: "在新标签页打开", icon: <ExternalIcon />, onSelect: () => window.open(c.url, "_blank", "noopener") },
+      { key: "copy", label: "复制链接", icon: <CopyIcon />, onSelect: () => copyLink(c.url) },
+    ];
+    if (admin)
+      items.push(
+        { sep: true, key: "s1" },
+        { key: "edit", label: "编辑", icon: <EditIcon />, onSelect: () => setDrawer({ type: "content", id: c.id, edit: true }) },
+        { key: "pin", label: c.pinned ? "取消置顶" : "置顶", icon: c.pinned ? <PinOffIcon /> : <PinIcon size={15} />, onSelect: () => act(() => api(`/api/contents/${c.id}`, { method: "PATCH", body: { pinned: !c.pinned } }), c.pinned ? "已取消置顶" : "已置顶") },
+        moveItems("content", c.id, c.categoryId),
+        { key: "icon", label: "重新抓取图标", icon: <RefreshIcon />, onSelect: () => act(() => api(`/api/icon/content/${c.id}`, { body: { refetch: true } }), "已重新抓取图标") },
+        { sep: true, key: "s2" },
+        { key: "del", label: "删除", icon: <TrashIcon />, danger: true, onSelect: async () => (await dialog.confirm({ title: "删除这条收藏？", message: c.title, danger: true })) && act(() => api(`/api/contents/${c.id}`, { method: "DELETE" }), "已删除") },
+      );
+    setMenu({ x, y, title: c.title, items });
+  };
+
+  const railCats = rail.filter((r) => r.sortable);
+  const railBtn = (r: RailItem, h: HandleProps = {}) => (
+    <button {...h} key={r.id} className={cn("rail-item", current === r.id && "on")} onClick={() => pickCat(r.id)} aria-current={current === r.id}>
+      {current === r.id && <motion.span layoutId={`rail-${tab}`} className="rail-hl" transition={{ type: "spring", stiffness: 420, damping: 36 }} />}
+      <span className="ri" aria-hidden="true"><CatIcon name={r.icon} /></span>
+      <span className="rn">{r.name}</span>
+      <span className="n">{r.n}</span>
+    </button>
+  );
+
   return (
     <>
       <Starfield />
@@ -158,14 +307,14 @@ function App({ initial }: { initial: AppData }) {
         </button>
         <div className="actions">
           <ThemeToggle />
-          {data.admin && (
-            <button className="add-btn" onClick={() => setAdding(true)}>
-              <span>+ 添加</span>
+          {admin && (
+            <button className="add-btn" onClick={() => setAdding(true)} aria-label="添加">
+              <span><PlusIcon size={15} /> <em>添加</em></span>
             </button>
           )}
-          <Link className="avatar-btn" href={data.admin ? "/admin" : "/login"} aria-label={data.admin ? "夜航后台" : "登录"}>
+          <Link className="avatar-btn" href={admin ? "/admin" : "/login"} aria-label={admin ? "夜航后台" : "登录"}>
             <span className="avatar">夜</span>
-            <span>{data.admin ? "后台" : "登录"}</span>
+            <span>{admin ? "后台" : "登录"}</span>
           </Link>
         </div>
       </header>
@@ -186,19 +335,21 @@ function App({ initial }: { initial: AppData }) {
           <aside className="rail glass" aria-label="分类">
             <p className="rail-title">{tab === "sites" ? "站点分类" : tab === "contents" ? "内容分类" : "监控筛选"}</p>
             <nav className="rail-list">
-              {rail.map((r) => (
-                <button key={r.id} className={cn("rail-item", current === r.id && "on")} onClick={() => pickCat(r.id)} aria-current={current === r.id}>
-                  {current === r.id && <motion.span layoutId={`rail-${tab}`} className="rail-hl" transition={{ type: "spring", stiffness: 420, damping: 36 }} />}
-                  <span className="ri" aria-hidden="true">{r.icon}</span>
-                  {r.name}
-                  <span className="n">{r.n}</span>
-                </button>
-              ))}
+              {rail.filter((r) => !r.sortable && r.id === "all").map((r) => railBtn(r))}
+              <SortList key={tab} ids={railCats.map((r) => r.id)} enabled={admin && tab !== "monitors"} onReorder={(ids) => reorderCats(tab === "sites" ? "site" : "content", ids)}>
+                {railCats.map((r) => (
+                  <SortItem key={r.id} id={r.id} className="rail-sort">
+                    {(h) => railBtn(r, h)}
+                  </SortItem>
+                ))}
+              </SortList>
+              {rail.filter((r) => !r.sortable && r.id !== "all").map((r) => railBtn(r))}
             </nav>
-            {tab !== "monitors" && data.admin && (
+            {tab !== "monitors" && admin && (
               <div className="rail-foot">
-                <p><span className="spark">✦</span> {data.aiEnabled ? "AI 已连接" : "规则模式"}</p>
-                <small>{data.aiEnabled ? "新链接会自动摘要、打标签、归类" : "设置 AI_BASE_URL / AI_API_KEY 启用 AI"}</small>
+                <p><span className="spark"><SparkIcon size={12} /></span> {data.aiEnabled ? "AI 已连接" : "规则模式"}</p>
+                <small>{data.aiEnabled ? "新链接会自动摘要、打标签、归类" : "在后台「设置」里配置 AI 后启用"}</small>
+                <small className="rail-tip">右键卡片打开菜单，拖动可排序</small>
               </div>
             )}
           </aside>
@@ -207,26 +358,37 @@ function App({ initial }: { initial: AppData }) {
             {tab === "sites" && (
               <section className="block" role="tabpanel">
                 {sites.length ? (
-                  <div className="sites">
-                    {sites.map((s, i) => (
-                      <SiteCard key={s.id} site={s} index={i} admin={data.admin} onMore={() => setDrawer({ type: "site", id: s.id })} />
-                    ))}
-                  </div>
+                  <SortList ids={sites.map((s) => s.id)} enabled={admin} onReorder={reorderSites}>
+                    <div className="sites">
+                      {sites.map((s, i) => (
+                        <SortItem key={s.id} id={s.id}>
+                          {(h) => <SiteCard site={s} index={i} handle={h} onMenu={siteMenu(s)} />}
+                        </SortItem>
+                      ))}
+                    </div>
+                  </SortList>
                 ) : (
-                  <p className="empty">{data.admin ? "这个分类还没有站点，点右上角「+ 添加」或让 AI 助手帮你添加。" : "这个分类还没有站点。"}</p>
+                  <p className="empty">{admin ? "这个分类还没有站点，点右上角「添加」或让 AI 助手帮你添加。" : "这个分类还没有站点。"}</p>
                 )}
               </section>
             )}
             {tab === "contents" && (
               <section className="block" role="tabpanel">
                 {contents.length ? (
-                  <div className="masonry">
-                    {contents.map((c, i) => (
-                      <ContentCard key={c.id} c={c} index={i} onOpen={() => setDrawer({ type: "content", id: c.id })} />
-                    ))}
-                  </div>
+                  <SortList ids={contents.map((c) => c.id)} enabled={admin} onReorder={reorderContents}>
+                    <Masonry count={contents.length}>
+                      {(i) => {
+                        const c = contents[i];
+                        return (
+                          <SortItem key={c.id} id={c.id}>
+                            {(h) => <ContentCard c={c} index={i} handle={h} onMenu={contentMenu(c)} onOpen={() => setDrawer({ type: "content", id: c.id })} />}
+                          </SortItem>
+                        );
+                      }}
+                    </Masonry>
+                  </SortList>
                 ) : (
-                  <p className="empty">{data.admin ? "这个分类还没有收藏，粘贴一个文章 / 视频 / 仓库链接试试。" : "这个分类还没有收藏。"}</p>
+                  <p className="empty">{admin ? "这个分类还没有收藏，粘贴一个文章 / 视频 / 仓库链接试试。" : "这个分类还没有收藏。"}</p>
                 )}
               </section>
             )}
@@ -245,7 +407,7 @@ function App({ initial }: { initial: AppData }) {
                     ))}
                   </div>
                 ) : (
-                  <p className="empty">{current === "bad" ? "一切正常。" : data.admin ? "还没有监控。「+ 添加」一个 API 地址，或粘贴 SSH 命令添加服务器。" : "还没有监控。"}</p>
+                  <p className="empty">{current === "bad" ? "一切正常。" : admin ? "还没有监控。「添加」一个 API 地址，或粘贴 SSH 命令添加服务器。" : "还没有监控。"}</p>
                 )}
               </section>
             )}
@@ -257,10 +419,11 @@ function App({ initial }: { initial: AppData }) {
         <ArrowUpIcon />
       </button>
 
+      <ContextMenu state={menu} onClose={closeMenu} />
       <Drawer target={drawer} data={data} onClose={() => setDrawer(null)} refresh={refresh} />
       <CommandPalette open={palette} onClose={() => setPalette(false)} data={data} onOpenItem={openItem} />
-      {data.admin && <AddDialog open={adding} onClose={() => setAdding(false)} refresh={refresh} aiEnabled={data.aiEnabled} />}
-      <Assistant open={chat} setOpen={setChat} admin={data.admin} aiEnabled={data.aiEnabled} refresh={refresh} onOpenItem={openItem} />
+      {admin && <AddDialog open={adding} onClose={() => setAdding(false)} refresh={refresh} aiEnabled={data.aiEnabled} />}
+      <Assistant open={chat} setOpen={setChat} admin={admin} aiEnabled={data.aiEnabled} refresh={refresh} onOpenItem={openItem} />
     </>
   );
 }

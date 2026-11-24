@@ -11,6 +11,6 @@ export async function POST(req: Request) {
   if (!kind || !name) return fail("请填写分类名称");
   if (await prisma.category.findFirst({ where: { kind, name } })) return fail("已存在同名分类");
   const max = await prisma.category.aggregate({ where: { kind }, _max: { sort: true } });
-  const c = await prisma.category.create({ data: { kind, name, icon: (b.icon ?? "").slice(0, 4), sort: (max._max.sort ?? -1) + 1 } });
+  const c = await prisma.category.create({ data: { kind, name, icon: (b.icon ?? "").slice(0, 32) || "folder", sort: (max._max.sort ?? -1) + 1 } });
   return json(c, 201);
 }

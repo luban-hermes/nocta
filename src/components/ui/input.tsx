@@ -1,4 +1,4 @@
-import { forwardRef, type InputHTMLAttributes, type SelectHTMLAttributes, type TextareaHTMLAttributes, type ReactNode } from "react";
+import { forwardRef, type InputHTMLAttributes, type TextareaHTMLAttributes, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
 export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement>>(function Input({ className, ...p }, ref) {
@@ -9,16 +9,15 @@ export const Textarea = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<H
   return <textarea ref={ref} className={cn("txa", className)} {...p} />;
 });
 
-export function Select({ className, ...p }: SelectHTMLAttributes<HTMLSelectElement>) {
-  return <select className={cn("sel", className)} {...p} />;
-}
+export { Select, type SelectOption } from "./select";
 
+/** a labelled form row. A <div> (not <label>) so custom controls such as Select are not re-clicked by label activation */
 export function Field({ label, children, className }: { label: string; children: ReactNode; className?: string }) {
   return (
-    <label className={cn("f-row", className)}>
+    <div className={cn("f-row", className)} role="group" aria-label={label}>
       <span>{label}</span>
       {children}
-    </label>
+    </div>
   );
 }
 

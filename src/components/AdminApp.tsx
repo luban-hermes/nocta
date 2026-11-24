@@ -7,28 +7,36 @@ import { api } from "@/lib/client";
 import { cn } from "@/lib/utils";
 import { Starfield } from "./Starfield";
 import { ThemeToggle } from "./ThemeToggle";
-import { ToastProvider, useToast } from "./ui/toast";
+import { useToast } from "./ui/toast";
+import { UIProvider, useDialog } from "./ui/dialog";
 import { Button } from "./ui/button";
-import { Input, Select } from "./ui/input";
-import { DownIcon, TrashIcon, UpIcon } from "./Icons";
+import { Input, Select, type SelectOption } from "./ui/input";
+import { SortItem, SortList } from "./ui/sortable";
+import { ArrowLeftIcon, CATEGORY_ICONS, CATEGORY_ICON_LABELS, CatIcon, GripIcon, LEGACY_GLYPHS, TrashIcon } from "./Icons";
 import { BrandOrb } from "./NoctaApp";
 import { Tile } from "./Cards";
+import { SettingsPanel } from "./SettingsPanel";
 
-type Config = { publicMode: boolean; publicMonitors: boolean; aiEnabled: boolean; aiModel: string; aiBaseUrl: string; allowPrivateMonitors: boolean; retentionDays: number; scheduler: boolean };
 type Section = "dash" | "cats" | "items" | "sys";
 
-export function AdminApp(props: { initial: AppData; config: Config }) {
+export function AdminApp(props: { initial: AppData }) {
   return (
-    <ToastProvider>
+    <UIProvider>
       <Admin {...props} />
-    </ToastProvider>
+    </UIProvider>
   );
 }
 
-function Admin({ initial, config }: { initial: AppData; config: Config }) {
+function Admin({ initial }: { initial: AppData }) {
   const [data, setData] = useState(initial);
   const [sec, setSec] = useState<Section>("dash");
   const refresh = useCallback(async () => setData(await api<AppData>("/api/data")), []);
+  const setCatOrder = (kind: CategoryKind, ids: string[]) =>
+    setData((d) => {
+      const at = new Map(ids.map((id, i) => [id, i]));
+      const mine = d.categories.filter((c) => c.kind === kind).map((c) => ({ ...c, sort: at.get(c.id) ?? c.sort })).sort((a, b) => a.sort - b.sort);
+      return { ...d, categories: [...d.categories.filter((c) => c.kind !== kind), ...mine] };
+    });
   const S: { id: Section; label: string }[] = [
     { id: "dash", label: "概览" },
     { id: "cats", label: "分类管理" },
@@ -47,7 +55,7 @@ function Admin({ initial, config }: { initial: AppData; config: Config }) {
         <span />
         <div className="actions">
           <ThemeToggle />
-          <Link className="btn" href="/">← 返回首页</Link>
+          <Link className="btn" href="/"><ArrowLeftIcon /> 返回首页</Link>
         </div>
       </header>
       <div className="admin-page">
@@ -65,12 +73,12 @@ function Admin({ initial, config }: { initial: AppData; config: Config }) {
           {sec === "dash" && <Dash data={data} />}
           {sec === "cats" && (
             <div className="grid gap-6 md:grid-cols-2">
-              <CatEditor kind="site" title="站点分类" cats={data.categories.filter((c) => c.kind === "site")} refresh={refresh} />
-              <CatEditor kind="content" title="内容分类" cats={data.categories.filter((c) => c.kind === "content")} refresh={refresh} />
+              <CatEditor kind="site" title="站点分类" cats={data.categories.filter((c) => c.kind === "site")} refresh={refresh} setCats={(ids) => setCatOrder("site", ids)} />
+              <CatEditor kind="content" title="内容分类" cats={data.categories.filter((c) => c.kind === "content")} refresh={refresh} setCats={(ids) => setCatOrder("content", ids)} />
             </div>
           )}
           {sec === "items" && <Items data={data} refresh={refresh} />}
-          {sec === "sys" && <Sys config={config} />}
+          {sec === "sys" && <SettingsPanel />}
         </motion.div>
       </div>
     </>
@@ -101,7 +109,7 @@ function Dash({ data }: { data: AppData }) {
         <div className="grid gap-2 mt-3">
           {data.contents.slice(0, 8).map((c) => (
             <a key={c.id} className="res-row" href={c.url} target="_blank" rel="noopener noreferrer">
-              <Tile src={c.favicon} name={c.domain} size="sm" />
+              <Tile src={c.icon} name={c.domain} size="sm" />
               <span className="truncate flex-1">{c.title}</span>
               <small style={{ color: "var(--text3)" }}>{c.domain}</small>
             </a>
@@ -113,65 +121,98 @@ function Dash({ data }: { data: AppData }) {
   );
 }
 
-function CatEditor({ kind, title, cats, refresh }: { kind: CategoryKind; title: string; cats: CategoryDTO[]; refresh: () => Promise<void> }) {
+const ICON_OPTIONS: SelectOption[] = Object.keys(CATEGORY_ICONS)
+  .filter((k) => !["layers", "inbox", "arrow-left-right", "triangle-alert"].includes(k))
+  .map((k) => ({ value: k, label: CATEGORY_ICON_LABELS[k] ?? k, icon: <CatIcon name={k} /> }));
+const normIcon = (v: string) => (CATEGORY_ICONS[v] ? v : LEGACY_GLYPHS[v] ?? "folder");
+
+function CatEditor({ kind, title, cats, refresh, setCats }: { kind: CategoryKind; title: string; cats: CategoryDTO[]; refresh: () => Promise<void>; setCats: (ids: string[]) => void }) {
   const toast = useToast();
+  const dialog = useDialog();
   const [name, setName] = useState("");
-  const [icon, setIcon] = useState("");
+  const [icon, setIcon] = useState("folder");
   const [edits, setEdits] = useState<Record<string, { name: string; icon: string }>>({});
   const call = async (fn: () => Promise<unknown>, ok?: string) => {
     try {
       await fn();
       await refresh();
       if (ok) toast(ok);
+      return true;
     } catch (e) {
-      toast(e instanceof Error ? e.message : "失败", "!");
+      toast(e instanceof Error ? e.message : "失败", "error");
+      return false;
     }
+  };
+  const save = (id: string, e: { name: string; icon: string }) =>
+    call(() => api(`/api/categories/${id}`, { method: "PATCH", body: e }), "已保存").then((ok) => ok && setEdits(({ [id]: _, ...rest }) => rest));
+  const reorder = (ids: string[]) => {
+    setCats(ids);
+    void api("/api/reorder", { body: { kind: "category", ids } }).catch((e) => {
+      toast(e instanceof Error ? e.message : "排序保存失败", "error");
+      void refresh();
+    });
   };
   return (
     <div className="panel">
-      <div className="ph"><h3>{title}</h3><small>{cats.length} 个</small></div>
-      <div className="grid gap-2 mt-3">
-        {cats.map((c, i) => {
-          const e = edits[c.id] ?? { name: c.name, icon: c.icon };
-          const dirty = e.name !== c.name || e.icon !== c.icon;
-          return (
-            <div className="cat-row" key={c.id}>
-              <Input className="icon-inp" value={e.icon} maxLength={4} aria-label="图标" onChange={(ev) => setEdits({ ...edits, [c.id]: { ...e, icon: ev.target.value } })} />
-              <Input value={e.name} aria-label="名称" onChange={(ev) => setEdits({ ...edits, [c.id]: { ...e, name: ev.target.value } })} onKeyDown={(ev) => ev.key === "Enter" && dirty && call(() => api(`/api/categories/${c.id}`, { method: "PATCH", body: e }), "已保存")} />
-              <small style={{ color: "var(--text3)", minWidth: 28, textAlign: "right" }}>{c.count}</small>
-              {dirty && <Button variant="primary" onClick={() => call(() => api(`/api/categories/${c.id}`, { method: "PATCH", body: e }), "已保存")}>保存</Button>}
-              <button className="icon-btn" aria-label="上移" disabled={i === 0} onClick={() => call(() => api(`/api/categories/${c.id}`, { method: "PATCH", body: { move: "up" } }))}><UpIcon /></button>
-              <button className="icon-btn" aria-label="下移" disabled={i === cats.length - 1} onClick={() => call(() => api(`/api/categories/${c.id}`, { method: "PATCH", body: { move: "down" } }))}><DownIcon /></button>
-              <button className="icon-btn" aria-label="删除" onClick={() => confirm(`删除分类「${c.name}」？其中的 ${c.count} 项会变为未分类。`) && call(() => api(`/api/categories/${c.id}`, { method: "DELETE" }), "已删除")}><TrashIcon /></button>
-            </div>
-          );
-        })}
-        <form
-          className="cat-row"
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (!name.trim()) return;
-            void call(() => api("/api/categories", { body: { kind, name, icon } }), "已添加").then(() => { setName(""); setIcon(""); });
-          }}
-        >
-          <Input className="icon-inp" value={icon} maxLength={4} placeholder="✦" aria-label="新分类图标" onChange={(e) => setIcon(e.target.value)} />
-          <Input value={name} placeholder="新分类名称" aria-label="新分类名称" onChange={(e) => setName(e.target.value)} />
-          <Button type="submit" variant="primary">添加</Button>
-        </form>
-      </div>
+      <div className="ph"><h3>{title}</h3><small>{cats.length} 个 · 按住左侧把手拖动排序</small></div>
+      <ul className="cat-list mt-3">
+        <SortList ids={cats.map((c) => c.id)} enabled axis="y" onReorder={reorder}>
+          {cats.map((c) => {
+            const e = edits[c.id] ?? { name: c.name, icon: normIcon(c.icon) };
+            const dirty = e.name !== c.name || e.icon !== c.icon;
+            return (
+              <SortItem key={c.id} id={c.id} as="li">
+                {(h, dragging) => (
+                  <div className={cn("cat-row", dragging && "lifted")}>
+                    <button type="button" className="grip" aria-label={`拖动排序：${c.name}`} {...h}><GripIcon /></button>
+                    <Select size="sm" className="icon-sel" ariaLabel="图标" value={e.icon} options={ICON_OPTIONS} onChange={(v) => setEdits({ ...edits, [c.id]: { ...e, icon: v } })} />
+                    <Input value={e.name} aria-label="名称" onChange={(ev) => setEdits({ ...edits, [c.id]: { ...e, name: ev.target.value } })} onKeyDown={(ev) => ev.key === "Enter" && dirty && save(c.id, e)} />
+                    <small className="cat-n">{c.count}</small>
+                    {dirty && <Button variant="primary" onClick={() => save(c.id, e)}>保存</Button>}
+                    <button
+                      className="icon-btn"
+                      aria-label={`删除分类 ${c.name}`}
+                      onClick={async () =>
+                        (await dialog.confirm({ title: `删除分类「${c.name}」？`, message: c.count ? `其中的 ${c.count} 项会变为「未分类」，不会被删除。` : "这个分类是空的。", danger: true })) &&
+                        call(() => api(`/api/categories/${c.id}`, { method: "DELETE" }), "已删除")
+                      }
+                    >
+                      <TrashIcon />
+                    </button>
+                  </div>
+                )}
+              </SortItem>
+            );
+          })}
+        </SortList>
+      </ul>
+      <form
+        className="cat-row add mt-2"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (!name.trim()) return;
+          void call(() => api("/api/categories", { body: { kind, name, icon } }), "已添加").then((ok) => ok && (setName(""), setIcon("folder")));
+        }}
+      >
+        <span className="grip ghost" aria-hidden="true" />
+        <Select size="sm" className="icon-sel" ariaLabel="新分类图标" value={icon} options={ICON_OPTIONS} onChange={setIcon} />
+        <Input value={name} placeholder="新分类名称" aria-label="新分类名称" onChange={(e) => setName(e.target.value)} />
+        <Button type="submit" variant="primary">添加</Button>
+      </form>
     </div>
   );
 }
 
 function Items({ data, refresh }: { data: AppData; refresh: () => Promise<void> }) {
   const toast = useToast();
+  const dialog = useDialog();
   const [q, setQ] = useState("");
   const catName = (id: string | null) => data.categories.find((c) => c.id === id)?.name ?? "未分类";
   const rows = useMemo(() => {
     const s = q.trim().toLowerCase();
     const all = [
-      ...data.sites.map((x) => ({ id: x.id, kind: "site" as const, title: x.name, url: x.url, favicon: x.favicon, domain: x.url, categoryId: x.categoryId, tags: "", date: x.createdAt })),
-      ...data.contents.map((x) => ({ id: x.id, kind: "content" as const, title: x.title, url: x.url, favicon: x.favicon, domain: x.domain, categoryId: x.categoryId, tags: x.tags.join(" · "), date: x.createdAt })),
+      ...data.sites.map((x) => ({ id: x.id, kind: "site" as const, title: x.name, url: x.url, icon: x.icon, domain: x.url, categoryId: x.categoryId, tags: "", date: x.createdAt })),
+      ...data.contents.map((x) => ({ id: x.id, kind: "content" as const, title: x.title, url: x.url, icon: x.icon, domain: x.domain, categoryId: x.categoryId, tags: x.tags.join(" · "), date: x.createdAt })),
     ];
     return all.filter((r) => !s || `${r.title} ${r.url} ${r.tags} ${catName(r.categoryId)}`.toLowerCase().includes(s));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -182,15 +223,20 @@ function Items({ data, refresh }: { data: AppData; refresh: () => Promise<void> 
       await refresh();
       toast("已移动");
     } catch (e) {
-      toast(e instanceof Error ? e.message : "失败", "!");
+      toast(e instanceof Error ? e.message : "失败", "error");
     }
   };
-  const del = async (kind: "site" | "content", id: string) => {
-    if (!confirm("确定删除？")) return;
-    await api(`/api/${kind === "site" ? "sites" : "contents"}/${id}`, { method: "DELETE" });
-    await refresh();
-    toast("已删除");
+  const del = async (kind: "site" | "content", id: string, title: string) => {
+    if (!(await dialog.confirm({ title: `删除${kind === "site" ? "站点" : "收藏"}「${title}」？`, message: "删除后无法恢复。", danger: true }))) return;
+    try {
+      await api(`/api/${kind === "site" ? "sites" : "contents"}/${id}`, { method: "DELETE" });
+      await refresh();
+      toast("已删除");
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "删除失败", "error");
+    }
   };
+  const catOpts = (kind: "site" | "content"): SelectOption[] => [{ value: "", label: "未分类", icon: <CatIcon name="inbox" /> }, ...data.categories.filter((c) => c.kind === kind).map((c) => ({ value: c.id, label: c.name, icon: <CatIcon name={c.icon} /> }))];
   return (
     <>
       <div className="a-h">
@@ -205,17 +251,14 @@ function Items({ data, refresh }: { data: AppData; refresh: () => Promise<void> 
           <tbody>
             {rows.map((r) => (
               <tr key={r.kind + r.id}>
-                <td><a className="tt" href={r.url} target="_blank" rel="noopener noreferrer"><Tile src={r.favicon} name={r.title} size="xs" /><span>{r.title}</span></a></td>
+                <td><a className="tt" href={r.url} target="_blank" rel="noopener noreferrer"><Tile src={r.icon} name={r.title} size="xs" /><span>{r.title}</span></a></td>
                 <td><span className="tag">{r.kind === "site" ? "站点" : "内容"}</span></td>
                 <td>
-                  <Select value={r.categoryId ?? ""} onChange={(e) => move(r.kind, r.id, e.target.value)} style={{ height: 34, minWidth: 110, fontSize: 13 }} aria-label="分类">
-                    <option value="">未分类</option>
-                    {data.categories.filter((c) => c.kind === r.kind).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-                  </Select>
+                  <Select size="sm" ariaLabel="分类" value={r.categoryId ?? ""} onChange={(v) => move(r.kind, r.id, v)} options={catOpts(r.kind)} />
                 </td>
                 <td style={{ color: "var(--text3)", fontSize: 12 }}>{r.tags}</td>
                 <td style={{ color: "var(--text3)", fontSize: 12, whiteSpace: "nowrap" }}>{r.date.slice(0, 10)}</td>
-                <td><div className="ops"><button aria-label="删除" onClick={() => del(r.kind, r.id)}><TrashIcon /></button></div></td>
+                <td><div className="ops"><button aria-label={`删除 ${r.title}`} onClick={() => del(r.kind, r.id, r.title)}><TrashIcon /></button></div></td>
               </tr>
             ))}
           </tbody>
@@ -223,32 +266,5 @@ function Items({ data, refresh }: { data: AppData; refresh: () => Promise<void> 
         {!rows.length && <p className="empty" style={{ margin: 16 }}>没有匹配的书签</p>}
       </div>
     </>
-  );
-}
-
-function Sys({ config }: { config: Config }) {
-  const logout = async () => {
-    await api("/api/auth/logout", { method: "POST" });
-    location.href = "/";
-  };
-  const yes = (b: boolean) => (b ? "开启" : "关闭");
-  return (
-    <div className="form" style={{ maxWidth: 720 }}>
-      <div className="panel">
-        <div className="ph"><h3>运行配置</h3><small>通过环境变量修改，重启生效</small></div>
-        <div className="kv-list mt-3">
-          <div><span>PUBLIC_MODE 访客可浏览导航</span><b>{yes(config.publicMode)}</b></div>
-          <div><span>PUBLIC_MONITORS 访客可见监控</span><b>{yes(config.publicMonitors)}</b></div>
-          <div><span>AI</span><b>{config.aiEnabled ? `${config.aiModel} @ ${config.aiBaseUrl}` : "未配置（规则模式）"}</b></div>
-          <div><span>监控调度器</span><b>{yes(config.scheduler)}</b></div>
-          <div><span>允许监控内网地址</span><b>{yes(config.allowPrivateMonitors)}</b></div>
-          <div><span>监控数据保留</span><b>{config.retentionDays} 天</b></div>
-        </div>
-      </div>
-      <div className="field">
-        <div className="fl"><b>退出登录</b><small>清除当前浏览器的管理员会话</small></div>
-        <Button variant="danger" onClick={logout}>退出登录</Button>
-      </div>
-    </div>
   );
 }

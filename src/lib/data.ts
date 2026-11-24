@@ -1,7 +1,7 @@
 import "server-only";
 import type { Category, Content, Monitor, Site } from "@prisma/client";
 import { prisma } from "./db";
-import { env } from "./env";
+import { getSettings } from "./settings";
 import { isAdmin } from "./auth";
 import { alertOf, effectiveStatus } from "./monitor";
 import { splitTags } from "./utils";
@@ -9,13 +9,19 @@ import type { AppData, CategoryDTO, ContentDTO, MonitorDTO, SiteDTO, Tick } from
 
 const TICKS = 48; // 24h in 30-minute buckets
 
+const iconUrl = (kind: "site" | "content", r: { id: string; iconFile: string; iconCheckedAt: Date | null }) =>
+  r.iconFile ? `/api/icon/${kind}/${r.id}?v=${(r.iconCheckedAt?.getTime() ?? 0).toString(36)}${r.iconFile.slice(-6).replace(/\W/g, "")}` : "";
+
 export const siteDTO = (s: Site): SiteDTO => ({
   id: s.id,
   name: s.name,
   url: s.url,
   description: s.description,
   favicon: s.favicon,
+  icon: iconUrl("site", s),
+  iconCustom: s.iconCustom,
   pinned: s.pinned,
+  sort: s.sort,
   categoryId: s.categoryId,
   createdAt: s.createdAt.toISOString(),
 });
@@ -27,6 +33,10 @@ export const contentDTO = (c: Content): ContentDTO => ({
   summary: c.summary,
   cover: c.cover,
   favicon: c.favicon,
+  icon: iconUrl("content", c),
+  iconCustom: c.iconCustom,
+  pinned: c.pinned,
+  sort: c.sort,
   domain: c.domain,
   type: (["article", "video", "repo", "post"].includes(c.type) ? c.type : "article") as ContentDTO["type"],
   tags: splitTags(c.tags),
@@ -125,11 +135,12 @@ export async function monitorsWithStats(monitors: Monitor[], admin: boolean): Pr
 
 export async function loadAppData(): Promise<AppData> {
   const admin = await isAdmin();
+  const env = await getSettings();
   const showMonitors = admin || env.publicMonitors;
   const [cats, sites, contents, monitors] = await Promise.all([
     prisma.category.findMany({ orderBy: [{ kind: "asc" }, { sort: "asc" }, { createdAt: "asc" }], include: { _count: { select: { sites: true, contents: true } } } }),
     prisma.site.findMany({ orderBy: [{ pinned: "desc" }, { sort: "asc" }, { createdAt: "asc" }] }),
-    prisma.content.findMany({ orderBy: { createdAt: "desc" } }),
+    prisma.content.findMany({ orderBy: [{ pinned: "desc" }, { sort: "asc" }, { createdAt: "desc" }] }),
     showMonitors ? prisma.monitor.findMany({ orderBy: { createdAt: "asc" } }) : Promise.resolve([] as Monitor[]),
   ]);
   const categories: CategoryDTO[] = cats.map((c: Category & { _count: { sites: number; contents: number } }) => ({

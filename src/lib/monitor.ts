@@ -3,7 +3,7 @@ import { randomBytes } from "node:crypto";
 import tls from "node:tls";
 import type { Monitor } from "@prisma/client";
 import { prisma } from "./db";
-import { env } from "./env";
+import { getSettings } from "./settings";
 import { assertPublicHost } from "./ssrf";
 
 export const SLOW_MS = 2000;
@@ -64,7 +64,7 @@ export interface CheckResult {
 
 export async function runHttpCheck(m: Pick<Monitor, "url" | "method" | "expectStatus" | "timeoutMs">): Promise<CheckResult> {
   const u = new URL(m.url);
-  if (!env.allowPrivateMonitors) await assertPublicHost(u.hostname);
+  if (!(await getSettings()).allowPrivateMonitors) await assertPublicHost(u.hostname);
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), m.timeoutMs || 10000);
   const sslP = u.protocol === "https:" ? sslInfo(u.hostname, Number(u.port || 443)) : Promise.resolve(null);
@@ -166,7 +166,7 @@ export function alertOf(m: Monitor): string {
 export async function createHttpMonitor(input: { url: string; name?: string; interval?: number; method?: string; expectStatus?: number | null; timeoutMs?: number }) {
   const u = new URL(input.url);
   if (u.protocol !== "http:" && u.protocol !== "https:") throw new Error("只支持 http/https 地址");
-  if (!env.allowPrivateMonitors) await assertPublicHost(u.hostname);
+  if (!(await getSettings()).allowPrivateMonitors) await assertPublicHost(u.hostname);
   const m = await prisma.monitor.create({
     data: {
       kind: "http",

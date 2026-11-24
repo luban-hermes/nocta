@@ -3,6 +3,7 @@ import { requireAdmin } from "@/lib/auth";
 import { siteDTO } from "@/lib/data";
 import { body, fail, json } from "@/lib/http";
 import { normalizeUrl } from "@/lib/utils";
+import { refreshIcon, removeIconFile } from "@/lib/icons";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -23,13 +24,17 @@ export async function PATCH(req: Request, { params }: Ctx) {
   if (b.categoryId !== undefined) data.categoryId = b.categoryId || null;
   if (b.pinned != null) data.pinned = !!b.pinned;
   const s = await prisma.site.update({ where: { id }, data }).catch(() => null);
-  return s ? json(siteDTO(s)) : fail("站点不存在", 404);
+  if (!s) return fail("站点不存在", 404);
+  // a new URL means a new site: re-fetch its icon unless the admin pinned a custom one
+  if (data.url && !s.iconCustom) return json(siteDTO((await refreshIcon("site", id).catch(() => null)) ?? s));
+  return json(siteDTO(s));
 }
 
 export async function DELETE(_req: Request, { params }: Ctx) {
   const deny = await requireAdmin();
   if (deny) return deny;
   const { id } = await params;
-  await prisma.site.delete({ where: { id } }).catch(() => null);
+  const s = await prisma.site.delete({ where: { id } }).catch(() => null);
+  if (s?.iconCustom) await removeIconFile(s.iconFile);
   return json({ ok: true });
 }

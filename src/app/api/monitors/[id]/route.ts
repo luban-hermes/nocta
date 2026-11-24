@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db";
-import { env } from "@/lib/env";
+import { getSettings } from "@/lib/settings";
 import { isAdmin, requireAdmin } from "@/lib/auth";
 import { monitorsWithStats } from "@/lib/data";
 import { body, fail, json } from "@/lib/http";
@@ -12,7 +12,7 @@ export const dynamic = "force-dynamic";
 
 export async function GET(_req: Request, { params }: Ctx) {
   const admin = await isAdmin();
-  if (!admin && !env.publicMonitors) return fail("需要管理员登录", 401);
+  if (!admin && !(await getSettings()).publicMonitors) return fail("需要管理员登录", 401);
   const { id } = await params;
   const m = await prisma.monitor.findUnique({ where: { id } });
   if (!m) return fail("监控不存在", 404);

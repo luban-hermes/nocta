@@ -7,8 +7,8 @@ import { PrismaClient } from "@prisma/client";
 const prisma = new PrismaClient();
 
 const CATS = {
-  site: [["常用", "★"], ["开发", "⌘"], ["设计", "◐"], ["AI 工具", "✦"], ["影音", "▶"]],
-  content: [["文章", "¶"], ["视频", "▶"], ["仓库", "⌥"], ["帖子", "❝"], ["稍后读", "◷"]],
+  site: [["常用", "star"], ["开发", "code"], ["设计", "palette"], ["AI 工具", "sparkles"], ["影音", "play"]],
+  content: [["文章", "file-text"], ["视频", "play"], ["仓库", "git-branch"], ["帖子", "message-square-quote"], ["稍后读", "clock"]],
 } as const;
 
 const SITES: [string, string, string][] = [

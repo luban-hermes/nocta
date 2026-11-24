@@ -15,11 +15,8 @@ if [ ! -w /app/data ]; then
   exit 1
 fi
 
-if [ -z "$ADMIN_PASSWORD" ]; then
-  echo "[nocta] WARNING: ADMIN_PASSWORD is not set — nobody can sign in to 夜航后台." >&2
-elif [ "$ADMIN_PASSWORD" = "change-me" ]; then
-  echo "[nocta] WARNING: ADMIN_PASSWORD is still the example value 'change-me' — sign-in stays disabled until you change it." >&2
-fi
+# no configuration is required: the admin password is chosen in the first-run setup wizard and
+# everything else lives in 夜航后台 → 系统设置 (env vars are optional defaults, see README)
 
 echo "[nocta] applying database migrations…"
 node /opt/prisma-cli/node_modules/prisma/build/index.js migrate deploy --schema /app/prisma/schema.prisma

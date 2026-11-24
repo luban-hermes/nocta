@@ -3,7 +3,7 @@ import { canView, isAdmin } from "@/lib/auth";
 import { chatJSON } from "@/lib/ai";
 import { addByUrl } from "@/lib/bookmarks";
 import { contentDTO, monitorDTO, siteDTO } from "@/lib/data";
-import { env } from "@/lib/env";
+import { getSettings } from "@/lib/settings";
 import { body, fail, json } from "@/lib/http";
 import { createHttpMonitor, createServerMonitor, parseSsh } from "@/lib/monitor";
 import { normalizeUrl } from "@/lib/utils";
@@ -103,6 +103,7 @@ export async function POST(req: Request) {
   // never see monitors (hosts / IPs) unless PUBLIC_MONITORS is on
   if (!(await canView())) return fail("需要登录", 401);
   const admin = await isAdmin();
+  const env = await getSettings();
   const withMonitors = admin || env.publicMonitors;
 
   // only the admin spends AI tokens; anonymous visitors get the rule-based planner

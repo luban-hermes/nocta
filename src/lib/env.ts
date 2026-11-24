@@ -1,46 +1,17 @@
-/** Runtime configuration (read on every call so `docker run -e` changes need no rebuild). */
-const bool = (v: string | undefined, d: boolean) => (v == null || v === "" ? d : /^(1|true|yes|on)$/i.test(v));
+/**
+ * Environment variables are optional since batch-1: every setting lives in the database and is edited
+ * in 夜航后台 → 设置. A variable that is set still works as the *default* for a setting that was never
+ * saved in the UI (back-compat for existing docker-compose files). Read on every call.
+ */
+export const bool = (v: string | undefined, d: boolean) => (v == null || v === "" ? d : /^(1|true|yes|on)$/i.test(v));
 
-export const env = {
-  /** the admin password; the placeholder from .env.example counts as "not set" so it can never be used to sign in */
-  get adminPassword() {
-    const v = process.env.ADMIN_PASSWORD ?? "";
-    return v === "change-me" ? "" : v;
-  },
-  get adminPasswordIsPlaceholder() {
-    return process.env.ADMIN_PASSWORD === "change-me";
-  },
-  get sessionSecret() {
-    return process.env.SESSION_SECRET ?? "";
-  },
-  /** visitors may browse the navigation without signing in */
-  get publicMode() {
-    return bool(process.env.PUBLIC_MODE, true);
-  },
-  /** visitors may also see the monitoring tab (hosts/URLs included) */
-  get publicMonitors() {
-    return bool(process.env.PUBLIC_MONITORS, false);
-  },
-  get aiBaseUrl() {
-    return (process.env.AI_BASE_URL ?? "").replace(/\/+$/, "");
-  },
-  get aiApiKey() {
-    return process.env.AI_API_KEY ?? "";
-  },
-  get aiModel() {
-    return process.env.AI_MODEL ?? "";
-  },
-  get aiEnabled() {
-    return !!(this.aiBaseUrl && this.aiModel && (this.aiApiKey || /localhost|127\.0\.0\.1|ollama|host\.docker\.internal/.test(this.aiBaseUrl)));
-  },
-  /** allow HTTP monitors to target private / LAN addresses (homelab). Bookmark fetching is always guarded. */
-  get allowPrivateMonitors() {
-    return bool(process.env.ALLOW_PRIVATE_MONITORS, true);
-  },
-  get schedulerEnabled() {
-    return bool(process.env.MONITOR_SCHEDULER, true);
-  },
-  get retentionDays() {
-    return Math.max(1, Number(process.env.MONITOR_RETENTION_DAYS ?? 7) || 7);
-  },
+export const envRaw = (name: string) => {
+  const v = process.env[name];
+  return v == null || v === "" ? undefined : v;
+};
+
+/** legacy ADMIN_PASSWORD (the .env.example placeholder counts as "not set") */
+export const legacyAdminPassword = () => {
+  const v = process.env.ADMIN_PASSWORD ?? "";
+  return v === "change-me" ? "" : v;
 };

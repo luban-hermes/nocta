@@ -42,10 +42,10 @@ export function CommandPalette({ open, onClose, data, onOpenItem }: { open: bool
     const out: Row[] = [];
     for (const x of data.sites)
       if (has(x.name, x.url, x.description))
-        out.push({ key: "s" + x.id, group: "站点", title: x.name, sub: x.url.replace(/^https?:\/\//, ""), icon: <Tile src={x.favicon} name={x.name} size="sm" />, run: () => window.open(x.url, "_blank", "noopener") });
+        out.push({ key: "s" + x.id, group: "站点", title: x.name, sub: x.url.replace(/^https?:\/\//, ""), icon: <Tile src={x.icon} name={x.name} size="sm" />, run: () => window.open(x.url, "_blank", "noopener") });
     for (const x of data.contents)
       if (has(x.title, x.summary, x.domain, x.tags.join(" ")))
-        out.push({ key: "c" + x.id, group: "收藏", title: x.title, sub: `${x.domain}${x.tags.length ? " · #" + x.tags.join(" #") : ""}`, icon: <Tile src={x.favicon} name={x.domain} size="sm" />, run: () => onOpenItem("content", x.id) });
+        out.push({ key: "c" + x.id, group: "收藏", title: x.title, sub: `${x.domain}${x.tags.length ? " · #" + x.tags.join(" #") : ""}`, icon: <Tile src={x.icon} name={x.domain} size="sm" />, run: () => onOpenItem("content", x.id) });
     for (const x of data.monitors)
       if (has(x.name, x.url, x.host, x.hostname))
         out.push({ key: "m" + x.id, group: "监控", title: x.name, sub: x.kind === "server" ? x.host : x.url, icon: <span className="p-type"><StatusDot status={x.status} /></span>, run: () => onOpenItem("monitor", x.id) });

@@ -1,12 +1,13 @@
 import "server-only";
-import { env } from "./env";
+import { getSettings } from "./settings";
 
 /**
  * Minimal OpenAI-compatible Chat Completions client.
  * Works with OpenAI, DeepSeek, 通义千问 (DashScope compatible-mode), Moonshot, Ollama (/v1) ...
  */
 export async function chat(messages: { role: "system" | "user" | "assistant"; content: string }[], opts: { json?: boolean; timeoutMs?: number; maxTokens?: number } = {}) {
-  if (!env.aiEnabled) throw new Error("AI 未配置");
+  const env = await getSettings();
+  if (!env.aiEnabled) throw new Error("AI 未配置（在后台「设置」里填写 Base URL 和模型）");
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), opts.timeoutMs ?? 25000);
   const call = async (withFormat: boolean) => {
@@ -41,7 +42,7 @@ export async function chat(messages: { role: "system" | "user" | "assistant"; co
 
 /** ask for a JSON object; returns null on any failure so callers can fall back to rules */
 export async function chatJSON<T = Record<string, unknown>>(system: string, user: string, maxTokens = 600): Promise<T | null> {
-  if (!env.aiEnabled) return null;
+  if (!(await getSettings()).aiEnabled) return null;
   try {
     const out = await chat(
       [

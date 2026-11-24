@@ -1,24 +1,25 @@
 import "server-only";
-import type { Category } from "@prisma/client";
+import type { Category, Content, Site } from "@prisma/client";
 import { prisma } from "./db";
 import { chatJSON } from "./ai";
 import { fetchMeta, type PageMeta } from "./metadata";
+import { refreshIcon } from "./icons";
 import { clip, domainOf, isBareDomain, joinTags, normalizeUrl } from "./utils";
 
 export const DEFAULT_CATEGORIES = {
   site: [
-    { name: "常用", icon: "★" },
-    { name: "开发", icon: "⌘" },
-    { name: "设计", icon: "◐" },
-    { name: "AI 工具", icon: "✦" },
-    { name: "影音", icon: "▶" },
+    { name: "常用", icon: "star" },
+    { name: "开发", icon: "code" },
+    { name: "设计", icon: "palette" },
+    { name: "AI 工具", icon: "sparkles" },
+    { name: "影音", icon: "play" },
   ],
   content: [
-    { name: "文章", icon: "¶" },
-    { name: "视频", icon: "▶" },
-    { name: "仓库", icon: "⌥" },
-    { name: "帖子", icon: "❝" },
-    { name: "稍后读", icon: "◷" },
+    { name: "文章", icon: "file-text" },
+    { name: "视频", icon: "play" },
+    { name: "仓库", icon: "git-branch" },
+    { name: "帖子", icon: "message-square-quote" },
+    { name: "稍后读", icon: "clock" },
   ],
 } as const;
 
@@ -116,14 +117,24 @@ const pickCat = (cats: Category[], name: string | undefined, fallback: string) =
 
 /* ---------------- public API ---------------- */
 
+/** cache the icon right away, but never let a slow icon host hold up the add for more than ~7s */
+function withIcon(kind: "site", id: string, meta?: PageMeta): Promise<Site | null>;
+function withIcon(kind: "content", id: string, meta?: PageMeta): Promise<Content | null>;
+async function withIcon(kind: "site" | "content", id: string, meta?: PageMeta) {
+  const job = refreshIcon(kind, id, meta).catch(() => null);
+  return Promise.race([job, new Promise<null>((res) => setTimeout(() => res(null), 7000))]);
+}
+
 export async function createSiteFromUrl(u: URL, opts: { name?: string; categoryId?: string } = {}) {
   const meta = await fetchMeta(u.toString());
   const cats = await prisma.category.findMany({ where: { kind: "site" }, orderBy: { sort: "asc" } });
   const ai = await aiForSite(u, meta, cats);
   const cat = opts.categoryId ? cats.find((c) => c.id === opts.categoryId) ?? null : pickCat(cats, ai?.category, guessSiteCategory(u));
   const brand = meta.siteName || meta.title.split(/\s[-|–—·]\s|[|｜]/)[0];
-  const site = await prisma.site.create({
+  const max = await prisma.site.aggregate({ _max: { sort: true } });
+  const created = await prisma.site.create({
     data: {
+      sort: (max._max.sort ?? -1) + 1,
       name: clip(opts.name || ai?.name || brand || domainOf(u.toString()), 40),
       url: u.toString(),
       description: clip(ai?.description || meta.description || "", 200),
@@ -131,6 +142,7 @@ export async function createSiteFromUrl(u: URL, opts: { name?: string; categoryI
       categoryId: cat?.id ?? null,
     },
   });
+  const site = (await withIcon("site", created.id, meta)) ?? created;
   return { site, usedAi: !!ai, fetched: meta.ok };
 }
 
@@ -142,8 +154,10 @@ export async function createContentFromUrl(u: URL, opts: { categoryId?: string }
   // URL patterns (YouTube, GitHub repo …) are more reliable than the model for the type
   const type: ContentType = ruleType !== "article" ? ruleType : ai?.type && ai.type in TYPE_CATEGORY ? ai.type : ruleType;
   const cat = opts.categoryId ? cats.find((c) => c.id === opts.categoryId) ?? null : pickCat(cats, ai?.category, TYPE_CATEGORY[type]);
-  const content = await prisma.content.create({
+  const min = await prisma.content.aggregate({ _min: { sort: true } });
+  const created = await prisma.content.create({
     data: {
+      sort: (min._min.sort ?? 1) - 1, // newest first
       url: u.toString(),
       title: clip(ai?.title || meta.title || u.toString(), 200),
       summary: clip(ai?.summary || ruleSummary(meta), 300),
@@ -156,6 +170,8 @@ export async function createContentFromUrl(u: URL, opts: { categoryId?: string }
       categoryId: cat?.id ?? null,
     },
   });
+  // the icon belongs to the site, so a content page uses the homepage's icon set unless the page itself declares some
+  const content = (await withIcon("content", created.id, meta.icons?.length ? meta : undefined)) ?? created;
   return { content, usedAi: !!ai, fetched: meta.ok };
 }
 

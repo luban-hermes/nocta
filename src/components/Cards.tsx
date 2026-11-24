@@ -4,9 +4,11 @@ import { useEffect, useRef, useState, type PointerEvent } from "react";
 import type { ContentDTO, MonitorDTO, SiteDTO, Tick } from "@/lib/types";
 import { ago, fmtRate } from "@/lib/client";
 import { cn } from "@/lib/utils";
-import { DotsIcon, PinIcon, PlayIcon } from "./Icons";
+import { ArrowDownIcon, ArrowUpIcon, PinIcon, PlayIcon, SparkIcon, WarnIcon } from "./Icons";
+import { useLongPress } from "./ui/context-menu";
+import { mergeHandlers, type HandleProps } from "./ui/sortable";
 
-/* ---------- favicon tile with letter fallback ---------- */
+/* ---------- icon tile: cached server-side icon; the letter tile is only the very last resort ---------- */
 /** an <img> that reports failures even when they happened before hydration */
 function useImgFallback(src?: string) {
   const ref = useRef<HTMLImageElement>(null);
@@ -19,23 +21,26 @@ function useImgFallback(src?: string) {
   return { ref, broken, onError: () => setBroken(true) };
 }
 
-export function Tile({ src, name, size }: { src?: string; name: string; size?: "sm" | "xs" }) {
+export function Tile({ src, name, size }: { src?: string; name: string; size?: "sm" | "xs" | "lg" }) {
   const { ref, broken, onError } = useImgFallback(src);
   const letter = (name.trim()[0] ?? "?").toUpperCase();
   return (
-    <span className={cn("tile", size)}>
-      {src && !broken ? <img ref={ref} src={src} alt="" referrerPolicy="no-referrer" onError={onError} /> : letter}
+    <span className={cn("tile", size, src && !broken && "has-img")}>
+      {src && !broken ? <img ref={ref} src={src} alt="" decoding="async" draggable={false} onError={onError} /> : <span className="tl">{letter}</span>}
     </span>
   );
 }
 
 const enter = (i: number) => ({ initial: { opacity: 0, y: 16 }, animate: { opacity: 1, y: 0 }, transition: { duration: 0.4, delay: Math.min(i, 20) * 0.03, ease: [0.22, 1, 0.36, 1] as const } });
 
-/* ---------- site card: favicon + name, click opens URL ---------- */
-export function SiteCard({ site, index, admin, onMore }: { site: SiteDTO; index: number; admin: boolean; onMore: () => void }) {
+type CardEvents = { handle?: HandleProps; onMenu?: (x: number, y: number) => void };
+
+/* ---------- site card: icon + name, click opens URL; right-click / long-press opens the menu ---------- */
+export function SiteCard({ site, index, handle, onMenu }: { site: SiteDTO; index: number } & CardEvents) {
   const [hot, setHot] = useState(false);
+  const lp = useLongPress(onMenu ?? null);
   const move = (e: PointerEvent<HTMLAnchorElement>) => {
-    if (e.pointerType !== "mouse") return;
+    if (e.pointerType !== "mouse" || document.body.classList.contains("is-sorting")) return;
     const el = e.currentTarget, r = el.getBoundingClientRect();
     const x = (e.clientX - r.left) / r.width, y = (e.clientY - r.top) / r.height;
     el.style.setProperty("--x", `${x * 100}%`);
@@ -46,18 +51,29 @@ export function SiteCard({ site, index, admin, onMore }: { site: SiteDTO; index:
   return (
     <motion.div {...enter(index)}>
       <a
+        {...mergeHandlers(handle, lp)}
         className={cn("site", hot && "is-hot")}
         href={site.url}
         target="_blank"
         rel="noopener noreferrer"
         title={site.description || site.url}
+        draggable={false}
         onPointerEnter={(e) => e.pointerType === "mouse" && setHot(true)}
         onPointerMove={move}
         onPointerLeave={() => setHot(false)}
         onContextMenu={(e) => {
-          if (!admin) return;
+          if (!onMenu) return;
           e.preventDefault();
-          onMore();
+          setHot(false);
+          onMenu(e.clientX, e.clientY);
+        }}
+        onKeyDown={(e) => {
+          handle?.onKeyDown?.(e);
+          if (onMenu && (e.key === "ContextMenu" || (e.shiftKey && e.key === "F10"))) {
+            e.preventDefault();
+            const r = e.currentTarget.getBoundingClientRect();
+            onMenu(r.left + r.width / 2, r.top + r.height / 2);
+          }
         }}
       >
         {site.pinned && (
@@ -65,20 +81,7 @@ export function SiteCard({ site, index, admin, onMore }: { site: SiteDTO; index:
             <PinIcon />
           </span>
         )}
-        {admin && (
-          <button
-            className="more"
-            aria-label={`编辑 ${site.name}`}
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              onMore();
-            }}
-          >
-            <DotsIcon />
-          </button>
-        )}
-        <Tile src={site.favicon} name={site.name} />
+        <Tile src={site.icon} name={site.name} />
         <span className="nm">{site.name}</span>
       </a>
     </motion.div>
@@ -93,7 +96,7 @@ export function Cover({ c, className }: { c: ContentDTO; className?: string }) {
   return (
     <div className={cn("cover", className)} style={{ ["--ar" as string]: c.type === "video" ? "16/9" : "16/10" }}>
       <div className="fallback" />
-      {c.cover && !broken && <img ref={ref} src={c.cover} alt="" loading="lazy" referrerPolicy="no-referrer" onError={onError} />}
+      {c.cover && !broken && <img ref={ref} src={c.cover} alt="" loading="lazy" draggable={false} referrerPolicy="no-referrer" onError={onError} />}
       {(!c.cover || broken) && <span className="ctitle">{c.title.slice(0, 40)}</span>}
       {c.type === "video" && (
         <span className="play" aria-hidden="true">
@@ -104,18 +107,50 @@ export function Cover({ c, className }: { c: ContentDTO; className?: string }) {
   );
 }
 
-export function ContentCard({ c, index, onOpen }: { c: ContentDTO; index: number; onOpen: () => void }) {
+export function ContentCard({ c, index, onOpen, handle, onMenu }: { c: ContentDTO; index: number; onOpen: () => void } & CardEvents) {
+  const lp = useLongPress(onMenu ?? null);
   return (
-    <motion.article {...enter(index)} className="item" onClick={onOpen} tabIndex={0} role="button" aria-label={c.title} onKeyDown={(e) => e.key === "Enter" && onOpen()}>
+    <motion.div {...enter(index)}>
+    <article
+      {...mergeHandlers(handle, lp)}
+      className="item"
+      onClick={onOpen}
+      tabIndex={0}
+      role="button"
+      aria-label={c.title}
+      onContextMenu={(e) => {
+        if (!onMenu) return;
+        e.preventDefault();
+        onMenu(e.clientX, e.clientY);
+      }}
+      onKeyDown={(e) => {
+        handle?.onKeyDown?.(e);
+        if (e.key === "Enter") onOpen();
+        if (onMenu && (e.key === "ContextMenu" || (e.shiftKey && e.key === "F10"))) {
+          e.preventDefault();
+          const r = e.currentTarget.getBoundingClientRect();
+          onMenu(r.left + 24, r.top + 24);
+        }
+      }}
+    >
       <Cover c={c} />
       <div className="ibody">
         <div className="irow">
           <span className="badge">{TYPE_LABEL[c.type]}</span>
+          {c.pinned && (
+            <span className="badge pinb" title="已置顶">
+              <PinIcon size={11} /> 置顶
+            </span>
+          )}
         </div>
         <h3 className="ititle">{c.title}</h3>
         {c.summary && (
           <>
-            {c.aiSummary && <span className="ai-label">AI 摘要</span>}
+            {c.aiSummary && (
+              <span className="ai-label">
+                <SparkIcon size={12} /> AI 摘要
+              </span>
+            )}
             <p className="isum" style={c.aiSummary ? undefined : { marginTop: 8 }}>{c.summary}</p>
           </>
         )}
@@ -127,14 +162,15 @@ export function ContentCard({ c, index, onOpen }: { c: ContentDTO; index: number
           </div>
         )}
         <div className="ifoot">
-          <Tile src={c.favicon} name={c.domain} size="xs" />
+          <Tile src={c.icon} name={c.domain} size="xs" />
           <span className="dom">{c.domain}</span>
           <span className="sep">·</span>
           <span suppressHydrationWarning>{ago(c.createdAt)}</span>
           <span className={cn("unread", c.read && "off")} title={c.read ? "已读" : "未读"} />
         </div>
       </div>
-    </motion.article>
+    </article>
+    </motion.div>
   );
 }
 
@@ -194,22 +230,22 @@ export function MonitorCard({ m, index, onOpen }: { m: MonitorDTO; index: number
       {m.kind === "server" ? (
         <>
           <p className="x-mon__os">{m.os || (m.lastReportAt ? m.hostname : "尚未收到探针数据 · 点击查看安装命令")}</p>
-          {m.alert && <span className="x-mon__alert">⚠ {m.alert}</span>}
+          {m.alert && <span className="x-mon__alert"><WarnIcon /> {m.alert}</span>}
           <div className="x-gauges">
             <Gauge label="CPU" value={m.cpu} />
             <Gauge label="内存" value={m.mem} />
             <Gauge label="磁盘" value={m.disk} />
           </div>
           <div className="x-mon__foot">
-            <span>↓ {fmtRate(m.rxRate)}</span>
-            <span>↑ {fmtRate(m.txRate)}</span>
+            <span className="rate"><ArrowDownIcon /> {fmtRate(m.rxRate)}</span>
+            <span className="rate"><ArrowUpIcon size={12} /> {fmtRate(m.txRate)}</span>
             <Sparkline data={m.spark} />
           </div>
         </>
       ) : (
         <>
           <p className="x-url">{m.url}</p>
-          {m.alert && <span className="x-mon__alert">⚠ {m.alert}</span>}
+          {m.alert && <span className="x-mon__alert"><WarnIcon /> {m.alert}</span>}
           <div className="x-kv">
             <div>
               <small>状态码</small>

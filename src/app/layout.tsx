@@ -1,4 +1,6 @@
 import type { Metadata, Viewport } from "next";
+import "@fontsource-variable/inter";
+import "@fontsource-variable/noto-sans-sc";
 import "./globals.css";
 
 export const metadata: Metadata = {

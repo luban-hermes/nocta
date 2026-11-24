@@ -23,7 +23,7 @@ export async function PATCH(req: Request, { params }: Ctx) {
   }
   const name = b.name?.trim().slice(0, 20);
   if (name && name !== cur.name && (await prisma.category.findFirst({ where: { kind: cur.kind, name } }))) return fail("已存在同名分类");
-  const c = await prisma.category.update({ where: { id }, data: { ...(name ? { name } : {}), ...(b.icon != null ? { icon: b.icon.slice(0, 4) } : {}) } });
+  const c = await prisma.category.update({ where: { id }, data: { ...(name ? { name } : {}), ...(b.icon != null ? { icon: b.icon.slice(0, 32) } : {}) } });
   return json(c);
 }
 

@@ -8,7 +8,9 @@ services:
       - "3000:3000"
     volumes:
       - ./data:/app/data
-    env_file:
-      - .env
-    environment:
-      DATABASE_URL: file:/app/data/nocta.db
+    # Nothing else is needed: open http://localhost:3000, set the admin password in the setup wizard,
+    # then configure AI / public access / monitoring / S3 backups in 夜航后台 → 系统设置.
+    # Optional overrides (see README → 环境变量):
+    # environment:
+    #   TZ: Asia/Shanghai
+    #   COOKIE_SECURE: "true"

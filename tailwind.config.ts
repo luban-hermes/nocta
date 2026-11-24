@@ -20,7 +20,7 @@ export default {
         warn: "var(--warn)",
         bad: "var(--bad)",
       },
-      fontFamily: { mono: "var(--mono)" },
+      fontFamily: { sans: "var(--font)", mono: "var(--mono)" },
     },
   },
   plugins: [],

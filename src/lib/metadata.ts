@@ -2,6 +2,8 @@ import "server-only";
 import { safeFetch } from "./ssrf";
 import { clip, domainOf } from "./utils";
 
+export interface IconCandidate { url: string; score: number }
+
 export interface PageMeta {
   url: string;
   title: string;
@@ -11,6 +13,9 @@ export interface PageMeta {
   siteName: string;
   type: string; // og:type
   text: string; // a little body text for the AI
+  /** every icon the page declares (apple-touch-icon, <link rel=icon>, manifest), best first */
+  icons?: IconCandidate[];
+  manifest?: string;
   ok: boolean;
   error?: string;
 }
@@ -40,13 +45,15 @@ export function parseHtml(html: string, baseUrl: string): Omit<PageMeta, "ok" | 
     if (key && a.content && !(key in meta)) meta[key] = a.content.trim();
   }
   const icons: { href: string; score: number }[] = [];
+  let manifest = "";
   for (const m of head.matchAll(/<link\b[^>]*>/gi)) {
     const a = attrs(m[0]);
     const rel = (a.rel || "").toLowerCase();
-    if (!a.href || !/icon/.test(rel)) continue;
-    const size = Number((a.sizes || "").split("x")[0]) || 16;
-    const score = (rel.includes("apple-touch") ? 180 : size) + (a.type?.includes("svg") ? 200 : 0);
-    icons.push({ href: a.href, score });
+    if (rel.split(/\s+/).includes("manifest") && a.href) manifest = a.href;
+    if (!a.href || !/icon/.test(rel) || /mask-icon/.test(rel)) continue;
+    const size = Math.max(...(a.sizes || "").split(/\s+/).map((x) => Number(x.split(/x/i)[0]) || 0), 0) || (rel.includes("apple-touch") ? 180 : 16);
+    const svg = a.type?.includes("svg") || /\.svg(\?|$)/i.test(a.href);
+    icons.push({ href: a.href, score: svg ? 400 : size });
   }
   const abs = (u: string) => {
     if (!u) return "";
@@ -69,6 +76,8 @@ export function parseHtml(html: string, baseUrl: string): Omit<PageMeta, "ok" | 
     description: clip(decodeEntities(meta["og:description"] || meta["description"] || meta["twitter:description"] || ""), 500),
     image: abs(meta["og:image"] || meta["og:image:url"] || meta["twitter:image"] || meta["twitter:image:src"] || ""),
     favicon: abs(icons[0]?.href || "") || `${origin}/favicon.ico`,
+    icons: icons.map((i) => ({ url: abs(i.href), score: i.score })).filter((i) => i.url),
+    manifest: abs(manifest),
     siteName: clip(decodeEntities(meta["og:site_name"] || meta["application-name"] || ""), 80),
     type: (meta["og:type"] || "").toLowerCase(),
     text: clip(decodeEntities(body), 2000),

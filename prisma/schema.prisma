@@ -34,6 +34,10 @@ model Site {
   url         String
   description String    @default("")
   favicon     String    @default("")
+  /// cached icon file in <data>/icons (h_* = shared per host, u_* = uploaded / custom URL)
+  iconFile      String    @default("")
+  iconCustom    Boolean   @default(false)
+  iconCheckedAt DateTime?
   pinned      Boolean   @default(false)
   sort        Int       @default(0)
   categoryId  String?
@@ -53,6 +57,11 @@ model Content {
   summary    String    @default("")
   cover      String    @default("")
   favicon    String    @default("")
+  iconFile      String    @default("")
+  iconCustom    Boolean   @default(false)
+  iconCheckedAt DateTime?
+  pinned     Boolean   @default(false)
+  sort       Int       @default(0)
   domain     String    @default("")
   type       String    @default("article")
   tags       String    @default("")
@@ -66,6 +75,7 @@ model Content {
 
   @@index([categoryId])
   @@index([createdAt])
+  @@index([sort])
 }
 
 /// kind: "http" | "server"
@@ -140,4 +150,12 @@ model Metric {
   createdAt DateTime @default(now())
 
   @@index([monitorId, createdAt])
+}
+
+/// runtime settings edited in 夜航后台 → 设置 (JSON values; secrets are AES-256-GCM encrypted
+/// with the key in <data>/secret.key)
+model Setting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
 }

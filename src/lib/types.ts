@@ -16,7 +16,11 @@ export interface SiteDTO {
   url: string;
   description: string;
   favicon: string;
+  /** cached icon served by /api/icon/site/:id ("" = none yet → letter tile) */
+  icon: string;
+  iconCustom: boolean;
   pinned: boolean;
+  sort: number;
   categoryId: string | null;
   createdAt: string;
 }
@@ -28,6 +32,10 @@ export interface ContentDTO {
   summary: string;
   cover: string;
   favicon: string;
+  icon: string;
+  iconCustom: boolean;
+  pinned: boolean;
+  sort: number;
   domain: string;
   type: "article" | "video" | "repo" | "post";
   tags: string[];

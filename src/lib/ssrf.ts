@@ -46,7 +46,7 @@ export async function assertPublicHost(hostname: string) {
  */
 export async function safeFetch(
   url: string,
-  opts: { timeoutMs?: number; maxBytes?: number; headers?: Record<string, string>; maxRedirects?: number } = {},
+  opts: { timeoutMs?: number; maxBytes?: number; headers?: Record<string, string>; maxRedirects?: number; allowPrivate?: boolean } = {},
 ) {
   const { timeoutMs = 8000, maxBytes = 768 * 1024, maxRedirects = 5 } = opts;
   const ctrl = new AbortController();
@@ -56,7 +56,7 @@ export async function safeFetch(
     for (let hop = 0; hop <= maxRedirects; hop++) {
       const u = new URL(current);
       if (u.protocol !== "http:" && u.protocol !== "https:") throw new BlockedHostError("只支持 http/https");
-      await assertPublicHost(u.hostname);
+      if (!opts.allowPrivate) await assertPublicHost(u.hostname);
       const res = await fetch(u, {
         redirect: "manual",
         signal: ctrl.signal,
@@ -72,8 +72,8 @@ export async function safeFetch(
         await res.body?.cancel();
         continue;
       }
-      const text = await readCapped(res, maxBytes);
-      return { url: current, status: res.status, headers: res.headers, text };
+      const buf = await readCapped(res, maxBytes);
+      return { url: current, status: res.status, headers: res.headers, buf, get text() { return decodeText(buf, res.headers); } };
     }
     throw new Error("重定向次数过多");
   } finally {
@@ -81,8 +81,8 @@ export async function safeFetch(
   }
 }
 
-async function readCapped(res: Response, maxBytes: number) {
-  if (!res.body) return "";
+async function readCapped(res: Response, maxBytes: number): Promise<Buffer> {
+  if (!res.body) return Buffer.alloc(0);
   const reader = res.body.getReader();
   const chunks: Uint8Array[] = [];
   let size = 0;
@@ -93,8 +93,11 @@ async function readCapped(res: Response, maxBytes: number) {
     size += value.byteLength;
   }
   await reader.cancel().catch(() => {});
-  const buf = Buffer.concat(chunks.map((c) => Buffer.from(c))).subarray(0, maxBytes);
-  const ct = res.headers.get("content-type") ?? "";
+  return Buffer.concat(chunks.map((c) => Buffer.from(c))).subarray(0, maxBytes);
+}
+
+function decodeText(buf: Buffer, headers: Headers) {
+  const ct = headers.get("content-type") ?? "";
   const m = ct.match(/charset=([\w-]+)/i) ?? buf.subarray(0, 2048).toString("latin1").match(/<meta[^>]+charset=["']?([\w-]+)/i);
   const charset = (m?.[1] ?? "utf-8").toLowerCase();
   try {

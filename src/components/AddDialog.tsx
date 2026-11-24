@@ -113,7 +113,7 @@ export function AddDialog({ open, onClose, refresh, aiEnabled }: { open: boolean
           </div>
         )}
         <div className="preview">
-          {res?.kind === "site" && <div style={{ width: 130, margin: "0 auto" }}><SiteCard site={res.site} index={0} admin={false} onMore={() => {}} /></div>}
+          {res?.kind === "site" && <div style={{ width: 130, margin: "0 auto" }}><SiteCard site={res.site} index={0} /></div>}
           {res?.kind === "content" && <ContentCard c={res.content} index={0} onOpen={() => {}} />}
           {res && !res.fetched && <p className="sub" style={{ marginTop: 8 }}>页面抓取失败（超时或被拒绝），已用网址信息代替，可稍后编辑。</p>}
           {mon && <MonitorCard m={mon} index={0} onOpen={() => {}} />}
