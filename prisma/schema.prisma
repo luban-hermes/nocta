@@ -1,0 +1,143 @@
+// 夜航 Nocta — data model
+// SQLite by default. To move to PostgreSQL later: change `provider` to "postgresql",
+// point DATABASE_URL at your Postgres instance and run `prisma migrate dev` once
+// to create a fresh migration history (see README → Roadmap).
+
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x", "linux-musl-arm64-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+/// kind: "site" | "content"
+model Category {
+  id        String    @id @default(cuid())
+  kind      String
+  name      String
+  icon      String    @default("")
+  sort      Int       @default(0)
+  createdAt DateTime  @default(now())
+  sites     Site[]
+  contents  Content[]
+
+  @@unique([kind, name])
+  @@index([kind, sort])
+}
+
+model Site {
+  id          String    @id @default(cuid())
+  name        String
+  url         String
+  description String    @default("")
+  favicon     String    @default("")
+  pinned      Boolean   @default(false)
+  sort        Int       @default(0)
+  categoryId  String?
+  category    Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([categoryId])
+}
+
+/// type: "article" | "video" | "repo" | "post"
+/// tags: comma separated (SQLite has no scalar lists; keeps the Postgres swap trivial)
+model Content {
+  id         String    @id @default(cuid())
+  url        String
+  title      String
+  summary    String    @default("")
+  cover      String    @default("")
+  favicon    String    @default("")
+  domain     String    @default("")
+  type       String    @default("article")
+  tags       String    @default("")
+  note       String    @default("")
+  read       Boolean   @default(false)
+  aiSummary  Boolean   @default(false)
+  categoryId String?
+  category   Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@index([categoryId])
+  @@index([createdAt])
+}
+
+/// kind: "http" | "server"
+/// status: "pending" | "up" | "warn" | "down" | "paused"
+model Monitor {
+  id            String    @id @default(cuid())
+  kind          String
+  name          String
+  // http
+  url           String    @default("")
+  method        String    @default("GET")
+  expectStatus  Int?
+  timeoutMs     Int       @default(10000)
+  interval      Int       @default(60)
+  lastStatus    Int?
+  lastLatency   Int?
+  sslDays       Int?
+  sslExpiresAt  DateTime?
+  lastError     String    @default("")
+  lastCheckedAt DateTime?
+  // server (push agent)
+  host          String    @default("")
+  port          Int       @default(22)
+  sshUser       String    @default("root")
+  token         String?   @unique
+  hostname      String    @default("")
+  os            String    @default("")
+  uptime        Int?
+  cpu           Float?
+  mem           Float?
+  memTotal      Float?
+  disk          Float?
+  diskTotal     Float?
+  load          String    @default("")
+  rxRate        Float?
+  txRate        Float?
+  lastReportAt  DateTime?
+  // common
+  status        String    @default("pending")
+  paused        Boolean   @default(false)
+  failCount     Int       @default(0)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  checks        Check[]
+  metrics       Metric[]
+
+  @@index([kind])
+}
+
+model Check {
+  id        String   @id @default(cuid())
+  monitorId String
+  monitor   Monitor  @relation(fields: [monitorId], references: [id], onDelete: Cascade)
+  ok        Boolean
+  status    Int?
+  latency   Int?
+  error     String   @default("")
+  createdAt DateTime @default(now())
+
+  @@index([monitorId, createdAt])
+}
+
+model Metric {
+  id        String   @id @default(cuid())
+  monitorId String
+  monitor   Monitor  @relation(fields: [monitorId], references: [id], onDelete: Cascade)
+  cpu       Float
+  mem       Float
+  disk      Float
+  rxRate    Float    @default(0)
+  txRate    Float    @default(0)
+  createdAt DateTime @default(now())
+
+  @@index([monitorId, createdAt])
+}
