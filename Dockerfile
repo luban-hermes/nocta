@@ -15,6 +15,16 @@ ENV NEXT_TELEMETRY_DISABLED=1
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN npx prisma generate && npm run build
+# trim what the standalone server never loads — here, before COPY, so the runner layers really get
+# smaller: sharp/libvips (images are unoptimized), the TypeScript compiler (traced only because of
+# next.config.ts) and the Prisma query engine built for the other CPU architecture
+RUN cd /app/.next/standalone/node_modules \
+ && rm -rf sharp @img typescript \
+ && case "$(uname -m)" in \
+      aarch64) rm -f .prisma/client/libquery_engine-linux-musl-openssl-3.0.x.so.node ;; \
+      x86_64)  rm -f .prisma/client/libquery_engine-linux-musl-arm64-openssl-3.0.x.so.node ;; \
+    esac \
+ && ls .prisma/client/libquery_engine-linux-musl*.so.node
 
 # a self-contained Prisma CLI (same version as package.json) for `migrate deploy` at start-up
 FROM node:20-alpine AS prisma-cli
@@ -47,15 +57,7 @@ COPY --from=builder --chown=nocta:nocta /app/prisma ./prisma
 COPY --from=builder --chown=nocta:nocta /app/agent ./agent
 COPY --from=prisma-cli /opt/prisma-cli/node_modules /opt/prisma-cli/node_modules
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
-# trim what the standalone server never loads: sharp/libvips (images are unoptimized), the
-# TypeScript compiler (traced only because of next.config.ts) and the Prisma engine of the other arch
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh && mkdir -p /app/data && chown nocta:nocta /app/data \
- && rm -rf /app/node_modules/sharp /app/node_modules/@img /app/node_modules/typescript \
- && case "$(uname -m)" in \
-      aarch64) rm -f /app/node_modules/.prisma/client/libquery_engine-linux-musl-openssl-3.0.x.so.node ;; \
-      x86_64)  rm -f /app/node_modules/.prisma/client/libquery_engine-linux-musl-arm64-openssl-3.0.x.so.node ;; \
-    esac \
- && ls /app/node_modules/.prisma/client/libquery_engine-linux-musl*.so.node
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh && mkdir -p /app/data && chown nocta:nocta /app/data
 
 VOLUME ["/app/data"]
 EXPOSE 3000
