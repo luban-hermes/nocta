@@ -239,7 +239,10 @@ export const STATUS_LABEL: Record<MonitorDTO["status"], string> = { up: "正常"
 export function MonitorCard({ m, index, onOpen }: { m: MonitorDTO; index: number; onOpen: () => void }) {
   const cls = cn("x-mon", m.status === "warn" && "warn", m.status === "down" && "bad", m.paused && "mon-paused");
   return (
-    <motion.article {...enter(index)} className={cls} onClick={onOpen} tabIndex={0} role="button" aria-label={`${m.name}，${STATUS_LABEL[m.status]}`} onKeyDown={(e) => e.key === "Enter" && onOpen()}>
+    // entrance animation lives on a wrapper: framer leaves an inline transform on the animated element,
+    // which would override the CSS :hover lift of .x-mon (v0.3.1)
+    <motion.div {...enter(index)} className="x-mon-wrap">
+    <article className={cls} onClick={onOpen} tabIndex={0} role="button" aria-label={`${m.name}，${STATUS_LABEL[m.status]}`} onKeyDown={(e) => e.key === "Enter" && onOpen()}>
       <div className="x-mon__top">
         <StatusDot status={m.status} />
         <h3>{m.name}</h3>
@@ -285,6 +288,7 @@ export function MonitorCard({ m, index, onOpen }: { m: MonitorDTO; index: number
           </div>
         </>
       )}
-    </motion.article>
+    </article>
+    </motion.div>
   );
 }

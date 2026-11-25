@@ -149,7 +149,11 @@ kbd{font-family:var(--mono);font-size:12px;padding:3px 7px;border-radius:7px;bor
 .empty{padding:40px;text-align:center;color:var(--text3);font-size:14px;border:1px dashed var(--line2);border-radius:20px}
 
 /* site cards */
-.sites{display:grid;grid-template-columns:repeat(auto-fill,minmax(118px,1fr));gap:14px;perspective:900px;content-visibility:auto;contain-intrinsic-size:auto 480px}
+/* v0.3.1: no content-visibility / contain here — paint containment clipped the hover lift + shadow of edge cards.
+   justify-content/justify-items:start → a short row always starts at the left edge, never centred. */
+.sites{display:grid;grid-template-columns:repeat(auto-fill,minmax(118px,1fr));justify-content:start;gap:14px;perspective:900px}
+.sites>*:hover,.x-mgrid>*:hover,.mcol>*:hover{position:relative;z-index:2}
+.x-mon-wrap{display:flex;flex-direction:column;min-width:0}.x-mon-wrap>.x-mon{flex:1}
 .site{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;aspect-ratio:1/1.02;border-radius:22px;background:var(--card);border:1px solid var(--line);overflow:hidden;transform-style:preserve-3d;transition:transform .5s var(--spring),box-shadow .35s var(--ease),border-color .35s;isolation:isolate}
 .site::before{content:"";position:absolute;inset:0;z-index:-1;background:radial-gradient(220px circle at var(--x,50%) var(--y,50%),rgba(var(--acc-rgb),.16),transparent 62%);opacity:0;transition:opacity .3s}
 .site::after{content:"";position:absolute;inset:0;border-radius:inherit;padding:1px;background:radial-gradient(150px circle at var(--x,50%) var(--y,50%),rgba(var(--acc-rgb),.8),transparent 70%);-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude;opacity:0;transition:opacity .3s;pointer-events:none}

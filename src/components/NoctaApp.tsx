@@ -78,32 +78,11 @@ function Masonry({ count, min = 290, gap = 16, children }: { count: number; min?
 }
 
 /**
- * site grid (item 12): normal auto-fill grid; when there are fewer cards than columns, the row keeps the
- * same card size and is centred instead of leaving empty columns on the right.
+ * site grid: plain auto-fill grid, cards keep their normal size and always fill from the left edge
+ * (a short row stays at the left, never centred or stretched — v0.3.1).
  */
-function SiteGrid({ count, children }: { count: number; children: ReactNode }) {
-  const ref = useRef<HTMLDivElement>(null);
-  const [few, setFew] = useState<number | null>(null);
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const fit = () => {
-      const narrow = matchMedia("(max-width:640px)").matches;
-      const min = narrow ? 88 : 118, gap = narrow ? 10 : 14;
-      const w = el.clientWidth;
-      const cols = Math.max(1, Math.floor((w + gap) / (min + gap)));
-      setFew(count < cols ? Math.floor((w - (cols - 1) * gap) / cols) : null);
-    };
-    fit();
-    const ro = new ResizeObserver(fit);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [count]);
-  return (
-    <div ref={ref} className="sites" style={few ? { gridTemplateColumns: `repeat(${count},${few}px)`, justifyContent: "center" } : undefined}>
-      {children}
-    </div>
-  );
+function SiteGrid({ children }: { count?: number; children: ReactNode }) {
+  return <div className="sites">{children}</div>;
 }
 
 function App({ initial }: { initial: AppData }) {
