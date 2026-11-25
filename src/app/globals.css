@@ -761,9 +761,7 @@ img{max-width:100%}
 .icon-ed .tile{flex:none}
 @media (max-width:520px){.icon-ed{flex-direction:column;align-items:stretch}.icon-ed .tile{align-self:center}}
 /* ===== batch-1: wide screens (no empty right side), icons, menus, drag & drop ===== */
-.app{max-width:2200px}
-.topbar{max-width:2200px}
-@media (min-width:1800px){.sites{grid-template-columns:repeat(auto-fill,minmax(128px,1fr))}.layout{grid-template-columns:240px minmax(0,1fr)}}
+/* batch-2 (item 12): content stays a centred 1440px column again; wide screens get symmetric margins */
 .x-mgrid{grid-template-columns:repeat(auto-fill,minmax(min(300px,100%),1fr))}
 .tile .tl{position:relative;z-index:1;line-height:1}
 .tile.has-img{background:var(--tilebg)}
@@ -787,9 +785,19 @@ img{max-width:100%}
 /* drag & drop */
 .sort-item{will-change:auto}
 .sort-item.is-dragging{will-change:transform}
-.sort-item.is-dragging .site{transform:scale(1.07);box-shadow:0 28px 50px -18px rgba(0,0,0,.6),0 0 0 1px rgba(var(--acc-rgb),.5);border-color:rgba(var(--acc-rgb),.5);transition:transform .25s var(--spring),box-shadow .25s}
-.sort-item.is-dragging .item{transform:scale(1.03) rotate(-.6deg);box-shadow:0 30px 60px -24px rgba(0,0,0,.65),0 0 0 1px rgba(var(--acc-rgb),.45);transition:transform .25s var(--spring),box-shadow .25s}
-.sort-item.is-dragging .rail-item{background:var(--card-hi);box-shadow:0 10px 24px -12px rgba(0,0,0,.6),inset 0 0 0 1px rgba(var(--acc-rgb),.4)}
+/* batch-2 (item 11): the slot left behind is a faded placeholder; the lifted copy lives in a DragOverlay on <body> */
+.sort-item.is-dragging{opacity:.32}
+.sort-item.is-dragging .site,.sort-item.is-dragging .item{box-shadow:none}
+.drag-overlay{pointer-events:none}
+.drag-lift{width:100%;height:100%;animation:lift .22s var(--spring) both}
+@keyframes lift{from{transform:scale(1)}to{transform:scale(var(--lift,1.06))}}
+.drag-lift>*{width:100%;height:100%}
+.drag-lift .site{box-shadow:0 28px 50px -18px rgba(0,0,0,.6),0 0 0 1px rgba(var(--acc-rgb),.5);border-color:rgba(var(--acc-rgb),.5)}
+.drag-lift .item{--lift:1.03;box-shadow:0 30px 60px -24px rgba(0,0,0,.65),0 0 0 1px rgba(var(--acc-rgb),.45);height:auto}
+.drag-lift:has(.item){--lift:1.03}
+.drag-lift:has(.rail-item),.drag-lift:has(.cat-row){--lift:1.02}
+.drag-lift .rail-item{width:100%;background:var(--card-hi);box-shadow:0 10px 24px -12px rgba(0,0,0,.6),inset 0 0 0 1px rgba(var(--acc-rgb),.4)}
+.drag-lift .cat-row{background:var(--card-hi);box-shadow:0 18px 40px -18px rgba(0,0,0,.65),0 0 0 1px rgba(var(--acc-rgb),.45)}
 .is-sorting,.is-sorting *{cursor:grabbing!important}
 .is-sorting .site::before,.is-sorting .site::after{opacity:0!important}
 .is-sorting .item:hover{transform:none}
@@ -798,13 +806,11 @@ img{max-width:100%}
 .cat-row .grip{width:28px;height:40px;flex:none;display:grid;place-items:center;border-radius:10px;color:var(--text3);cursor:grab;touch-action:none}
 .cat-row .grip:hover{color:var(--text);background:var(--chip)}
 .cat-row .grip.ghost{cursor:default}
-.cat-row.lifted{background:var(--card-hi);box-shadow:0 18px 40px -18px rgba(0,0,0,.65),0 0 0 1px rgba(var(--acc-rgb),.45);transform:scale(1.02);transition:transform .2s var(--spring),box-shadow .2s}
 .cat-row .cat-n{color:var(--text3);min-width:28px;text-align:right;font-variant-numeric:tabular-nums}
 .icon-sel.sel-btn{width:64px;min-width:64px;flex:none;height:40px;padding:0 6px 0 10px}
 .icon-sel .sel-v{display:none}
 .icon-sel .sel-ic{color:var(--text)}
 /* ===== batch-1: settings (item 4), backups (item 5), setup wizard ===== */
-.settings{display:grid;gap:16px;max-width:860px;margin:0 auto}
 .set-panel .ph h3{display:flex;align-items:center;gap:10px}
 .set-ic{width:30px;height:30px;border-radius:10px;display:grid;place-items:center;color:var(--accent-t);background:rgba(var(--acc-rgb),.13)}
 .set-body{display:grid;gap:4px;margin-top:12px}
@@ -816,7 +822,6 @@ img{max-width:100%}
 .set-c>.inp,.set-c>.sel-btn,.set-c>.set-inline{width:100%}
 .set-inline{display:flex;gap:8px}
 .set-inline .inp{flex:1;min-width:0}
-.set-src{font-size:11px;font-weight:500;padding:1px 7px;border-radius:99px;color:var(--warn);border:1px solid color-mix(in srgb,var(--warn) 40%,transparent)}
 .set-grid{display:grid;grid-template-columns:1fr 1fr;column-gap:20px}
 .set-grid.three{grid-template-columns:repeat(3,1fr)}
 .set-grid .set-row{grid-template-columns:1fr;gap:6px;border-top:0;padding:6px 0}
@@ -842,3 +847,51 @@ img{max-width:100%}
 .setup-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;border-radius:14px;background:var(--chip);border:1px solid var(--line)}
 .setup-row b{display:block;font-size:14px;font-weight:500}
 .setup-row small{display:block;font-size:12px;color:var(--text3);margin-top:2px}
+
+/* ===== batch-2 (item 10): settings = left vertical sub-tabs + one section on the right ===== */
+.settings{display:grid;grid-template-columns:200px minmax(0,1fr);gap:20px;align-items:start;max-width:1040px;margin:0 auto}
+.set-tabs{position:sticky;top:16px;display:flex;flex-direction:column;gap:2px;padding:10px;border-radius:20px;background:var(--card)}
+.set-tab{position:relative;z-index:1;display:flex;align-items:center;gap:10px;height:42px;padding:0 12px;border-radius:12px;font-size:14px;color:var(--text2);text-align:left;white-space:nowrap;transition:color .25s}
+.set-tab:hover,.set-tab.on{color:var(--text)}
+.set-tab-ic{display:grid;place-items:center;width:18px;height:18px;opacity:.85}
+.set-tab.on .set-tab-ic{color:var(--accent-t);opacity:1}
+.set-pane{display:grid;gap:16px;min-width:0}
+@media (max-width:760px){
+  .settings{grid-template-columns:minmax(0,1fr);gap:12px}
+  .set-tabs{position:relative;flex-direction:row;overflow-x:auto;scrollbar-width:none;padding:6px;border-radius:16px}
+  .set-tabs::-webkit-scrollbar{display:none}
+  .set-tab{flex:none;height:44px}
+  .set-tab .rail-hl::before{display:none}
+}
+/* ===== batch-2 (item 13): multi-link sites ===== */
+.ln-dot{display:inline-block;width:8px;height:8px;border-radius:50%;flex:none;background:var(--text3);opacity:.6}
+.ln-dot.ok{background:var(--ok);opacity:1;box-shadow:0 0 0 3px color-mix(in srgb,var(--ok) 20%,transparent)}
+.ln-dot.down{background:var(--bad);opacity:1}
+.ln-dot.checking{animation:blink 1s steps(1) infinite}
+.ln-ms{margin-left:auto;padding-left:10px;font:12px var(--mono);color:var(--text3);white-space:nowrap}
+.pop-item .ln-ms{flex:none}
+.bk-links{display:grid;gap:8px}
+.bk-link{display:flex;align-items:center;gap:8px;color:var(--text3)}
+.bk-link .inp{flex:1;min-width:0;height:40px}
+.bk-link .icon-btn{flex:none}
+.bk-add{justify-self:start;display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 12px;border-radius:10px;font-size:13px;color:var(--text2);border:1px dashed var(--line2);transition:color .2s,border-color .2s}
+.bk-add:hover{color:var(--text);border-color:rgba(var(--acc-rgb),.5)}
+.merge-hint{display:flex;justify-content:center;margin-top:10px}
+.lk-list{display:grid;gap:8px}
+.lk-list .sort-item{display:block}
+.lk-row{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:14px;background:var(--chip);border:1px solid var(--line)}
+.lk-row .grip{width:24px;height:36px;flex:none;display:grid;place-items:center;border-radius:8px;color:var(--text3);cursor:grab;touch-action:none}
+.lk-row .grip:hover{color:var(--text)}
+.lk-row .inp{height:36px;flex:1;min-width:0}
+.lk-row .inp.lk-note{flex:0 0 96px}
+.lk-row .icon-btn{flex:none;width:36px;height:36px}
+.lk-row .icon-btn:disabled{opacity:.35}
+.drag-lift .lk-row{background:var(--card-hi);box-shadow:0 18px 40px -18px rgba(0,0,0,.65),0 0 0 1px rgba(var(--acc-rgb),.45)}
+.drag-lift:has(.lk-row){--lift:1.02}
+@media (max-width:520px){.lk-row .inp.lk-note{flex-basis:72px}}
+.lk-view{list-style:none;display:grid;gap:6px}
+.lk-view a{display:flex;align-items:center;gap:10px;min-height:40px;padding:6px 12px;border-radius:12px;background:var(--chip);border:1px solid var(--line);font-size:13px}
+.lk-view a:hover{border-color:rgba(var(--acc-rgb),.5)}
+.lk-u{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* the lifted copy is opaque: the glass card would otherwise show whatever it is dragged over */
+.drag-lift .site,.drag-lift .item,.drag-lift .rail-item,.drag-lift .cat-row,.drag-lift .lk-row{background:linear-gradient(var(--card-hi),var(--card-hi)),var(--bg2);-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px)}

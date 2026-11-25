@@ -8,9 +8,10 @@ import { Button } from "./ui/button";
 import { Field, Input } from "./ui/input";
 import { useToast } from "./ui/toast";
 import { ContentCard, MonitorCard, SiteCard } from "./Cards";
+import { CloseIcon, LinkIcon, PlusIcon } from "./Icons";
 
 type Mode = "bookmark" | "http" | "server";
-type AddResult = { kind: "site"; site: SiteDTO; usedAi: boolean; fetched: boolean } | { kind: "content"; content: ContentDTO; usedAi: boolean; fetched: boolean };
+type AddResult = { kind: "site"; site: SiteDTO; usedAi: boolean; fetched: boolean; similar?: { id: string; name: string } | null } | { kind: "content"; content: ContentDTO; usedAi: boolean; fetched: boolean };
 
 const MODES: { id: Mode; label: string }[] = [
   { id: "bookmark", label: "书签" },
@@ -22,6 +23,8 @@ export function AddDialog({ open, onClose, refresh, aiEnabled }: { open: boolean
   const toast = useToast();
   const [mode, setMode] = useState<Mode>("bookmark");
   const [url, setUrl] = useState("");
+  const [backups, setBackups] = useState<string[]>([]);
+  const [merging, setMerging] = useState(false);
   const [name, setName] = useState("");
   const [interval, setIntervalSec] = useState(60);
   const [busy, setBusy] = useState(false);
@@ -32,6 +35,7 @@ export function AddDialog({ open, onClose, refresh, aiEnabled }: { open: boolean
   useEffect(() => {
     if (open) {
       setUrl("");
+      setBackups([]);
       setName("");
       setErr("");
       setRes(null);
@@ -48,8 +52,9 @@ export function AddDialog({ open, onClose, refresh, aiEnabled }: { open: boolean
     setMon(null);
     try {
       if (mode === "bookmark") {
-        const r = await api<AddResult>("/api/add", { body: { url } });
+        const r = await api<AddResult>("/api/add", { body: { url, backups: backups.filter((b) => b.trim()) } });
         setRes(r);
+        setBackups([]);
         toast(r.kind === "site" ? "已添加到站点导航" : "已添加到收藏内容");
       } else {
         const m = await api<MonitorDTO>("/api/monitors", { body: mode === "server" ? { kind: "server", ssh: url, name: name || undefined, interval: Math.min(interval, 300) } : { kind: "http", url, name: name || undefined, interval } });
@@ -70,13 +75,7 @@ export function AddDialog({ open, onClose, refresh, aiEnabled }: { open: boolean
     <Modal open={open} onClose={onClose} label="添加" className="sm">
       <div className="a-pad">
         <h3>添加</h3>
-        <p className="sub">
-          {mode === "bookmark"
-            ? `粘贴链接：裸域名进「站点导航」，带路径的页面进「收藏内容」。${aiEnabled ? "AI 会自动摘要、打标签并归类。" : "未配置 AI，将按规则归类。"}`
-            : mode === "http"
-              ? "定时检查状态码、响应时间和 SSL 证书剩余天数。"
-              : "粘贴 SSH 地址（不需要密码），然后在服务器上运行一行命令安装探针。"}
-        </p>
+        <p className="sub">{mode === "bookmark" ? "收藏网站或文章，自动整理归类" : mode === "http" ? "检查网站或 API 是否在线" : "查看服务器的 CPU、内存和磁盘"}</p>
         <div className="seg mt-4" role="group" aria-label="类型">
           {MODES.map((m) => (
             <button key={m.id} type="button" aria-pressed={mode === m.id} onClick={() => { setMode(m.id); setErr(""); setRes(null); setMon(null); setIntervalSec(m.id === "server" ? 30 : 60); }}>
@@ -90,6 +89,20 @@ export function AddDialog({ open, onClose, refresh, aiEnabled }: { open: boolean
             <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder={mode === "server" ? "ssh root@203.0.113.50 -p 2222" : mode === "http" ? "https://api.example.com/health" : "https://"} autoComplete="off" spellCheck={false} autoFocus aria-label="地址" />
             <Button type="submit" variant="primary" loading={busy}>添加</Button>
           </div>
+          {mode === "bookmark" && (
+            <div className="bk-links">
+              {backups.map((b, i) => (
+                <div className="bk-link" key={i}>
+                  <LinkIcon />
+                  <Input value={b} onChange={(e) => setBackups(backups.map((x, j) => (j === i ? e.target.value : x)))} placeholder="备用链接 https://" autoComplete="off" spellCheck={false} aria-label={`备用链接 ${i + 1}`} />
+                  <button type="button" className="icon-btn" aria-label="移除备用链接" onClick={() => setBackups(backups.filter((_, j) => j !== i))}><CloseIcon /></button>
+                </div>
+              ))}
+              {backups.length < 9 && (
+                <button type="button" className="bk-add" onClick={() => setBackups([...backups, ""])}><PlusIcon size={14} /> 备用链接</button>
+              )}
+            </div>
+          )}
           {mode !== "bookmark" && (
             <div className="f-2">
               <Field label="名称（可选）"><Input value={name} onChange={(e) => setName(e.target.value)} /></Field>
@@ -114,12 +127,35 @@ export function AddDialog({ open, onClose, refresh, aiEnabled }: { open: boolean
         )}
         <div className="preview">
           {res?.kind === "site" && <div style={{ width: 130, margin: "0 auto" }}><SiteCard site={res.site} index={0} /></div>}
+          {res?.kind === "site" && res.similar && (
+            <div className="merge-hint">
+              <Button
+                loading={merging}
+                onClick={async () => {
+                  if (res.kind !== "site" || !res.similar) return;
+                  setMerging(true);
+                  try {
+                    const s = await api<SiteDTO>(`/api/sites/${res.site.id}/merge`, { body: { into: res.similar.id } });
+                    setRes({ ...res, site: s, similar: null });
+                    toast(`已作为「${s.name}」的备用链接`);
+                    await refresh();
+                  } catch (e) {
+                    toast(e instanceof Error ? e.message : "合并失败", "error");
+                  } finally {
+                    setMerging(false);
+                  }
+                }}
+              >
+                <LinkIcon /> 作为「{res.similar.name}」的备用链接
+              </Button>
+            </div>
+          )}
           {res?.kind === "content" && <ContentCard c={res.content} index={0} onOpen={() => {}} />}
-          {res && !res.fetched && <p className="sub" style={{ marginTop: 8 }}>页面抓取失败（超时或被拒绝），已用网址信息代替，可稍后编辑。</p>}
+          {res && !res.fetched && <p className="sub" style={{ marginTop: 8 }}>没能读取页面信息</p>}
           {mon && <MonitorCard m={mon} index={0} onOpen={() => {}} />}
           {mon?.kind === "server" && mon.token && (
             <div className="f-grid mt-3">
-              <p className="sub">在服务器上执行：</p>
+              <p className="sub">在服务器上运行</p>
               <pre className="code">{installCommand(origin, mon.token)}</pre>
               <Button onClick={() => copyText(installCommand(origin, mon.token!)).then(() => toast("已复制安装命令"))}>复制安装命令</Button>
             </div>

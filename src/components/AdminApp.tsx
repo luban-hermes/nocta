@@ -15,11 +15,14 @@ import { SortItem, SortList } from "./ui/sortable";
 import { ArrowLeftIcon, CATEGORY_ICONS, CATEGORY_ICON_LABELS, CatIcon, GripIcon, LEGACY_GLYPHS, TrashIcon } from "./Icons";
 import { BrandOrb } from "./NoctaApp";
 import { Tile } from "./Cards";
-import { SettingsPanel } from "./SettingsPanel";
+import { SettingsPanel, isSettingTab, type SettingTab } from "./SettingsPanel";
 
 type Section = "dash" | "cats" | "items" | "sys";
 
-export function AdminApp(props: { initial: AppData }) {
+const SECTIONS = ["dash", "cats", "items", "sys"] as const;
+export type AdminView = { sec?: string; tab?: string };
+
+export function AdminApp(props: { initial: AppData; view?: AdminView }) {
   return (
     <UIProvider>
       <Admin {...props} />
@@ -27,9 +30,23 @@ export function AdminApp(props: { initial: AppData }) {
   );
 }
 
-function Admin({ initial }: { initial: AppData }) {
+/** admin section + settings tab live in the URL (?sec=cats, ?tab=ai) so reload / share keeps them */
+function Admin({ initial, view }: { initial: AppData; view?: AdminView }) {
   const [data, setData] = useState(initial);
-  const [sec, setSec] = useState<Section>("dash");
+  const [sec, setSecState] = useState<Section>(isSettingTab(view?.tab) ? "sys" : (SECTIONS as readonly string[]).includes(view?.sec ?? "") ? (view!.sec as Section) : "dash");
+  const [tab, setTabState] = useState<SettingTab>(isSettingTab(view?.tab) ? view!.tab : "access");
+  const syncUrl = (s: Section, t: SettingTab) => {
+    const q = s === "sys" ? `?tab=${t}` : s === "dash" ? "" : `?sec=${s}`;
+    history.replaceState(history.state, "", location.pathname + q);
+  };
+  const setSec = (s: Section) => {
+    setSecState(s);
+    syncUrl(s, tab);
+  };
+  const setTab = (t: SettingTab) => {
+    setTabState(t);
+    syncUrl("sys", t);
+  };
   const refresh = useCallback(async () => setData(await api<AppData>("/api/data")), []);
   const setCatOrder = (kind: CategoryKind, ids: string[]) =>
     setData((d) => {
@@ -78,7 +95,7 @@ function Admin({ initial }: { initial: AppData }) {
             </div>
           )}
           {sec === "items" && <Items data={data} refresh={refresh} />}
-          {sec === "sys" && <SettingsPanel />}
+          {sec === "sys" && <SettingsPanel tab={tab} onTab={setTab} />}
         </motion.div>
       </div>
     </>
@@ -154,16 +171,24 @@ function CatEditor({ kind, title, cats, refresh, setCats }: { kind: CategoryKind
   };
   return (
     <div className="panel">
-      <div className="ph"><h3>{title}</h3><small>{cats.length} 个 · 按住左侧把手拖动排序</small></div>
+      <div className="ph"><h3>{title}</h3><small>{cats.length} 个</small></div>
       <ul className="cat-list mt-3">
-        <SortList ids={cats.map((c) => c.id)} enabled axis="y" onReorder={reorder}>
+        <SortList ids={cats.map((c) => c.id)} enabled axis="y" onReorder={reorder} overlay={(id) => { const c = cats.find((x) => x.id === id); return c ? (
+          <div className="cat-row">
+            <span className="grip"><GripIcon /></span>
+            <Select size="sm" className="icon-sel" ariaLabel="图标" value={(edits[c.id] ?? { icon: normIcon(c.icon) }).icon} options={ICON_OPTIONS} onChange={() => {}} />
+            <Input value={(edits[c.id] ?? { name: c.name }).name} aria-label="名称" readOnly />
+            <small className="cat-n">{c.count}</small>
+            <span className="icon-btn"><TrashIcon /></span>
+          </div>
+        ) : null; }}>
           {cats.map((c) => {
             const e = edits[c.id] ?? { name: c.name, icon: normIcon(c.icon) };
             const dirty = e.name !== c.name || e.icon !== c.icon;
             return (
               <SortItem key={c.id} id={c.id} as="li">
-                {(h, dragging) => (
-                  <div className={cn("cat-row", dragging && "lifted")}>
+                {(h) => (
+                  <div className="cat-row">
                     <button type="button" className="grip" aria-label={`拖动排序：${c.name}`} {...h}><GripIcon /></button>
                     <Select size="sm" className="icon-sel" ariaLabel="图标" value={e.icon} options={ICON_OPTIONS} onChange={(v) => setEdits({ ...edits, [c.id]: { ...e, icon: v } })} />
                     <Input value={e.name} aria-label="名称" onChange={(ev) => setEdits({ ...edits, [c.id]: { ...e, name: ev.target.value } })} onKeyDown={(ev) => ev.key === "Enter" && dirty && save(c.id, e)} />

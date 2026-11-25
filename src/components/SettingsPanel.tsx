@@ -7,12 +7,14 @@ import { Input, Select, Switch, type SelectOption } from "./ui/input";
 import { useDialog } from "./ui/dialog";
 import { useToast } from "./ui/toast";
 import { CloudIcon, KeyIcon, LogoutIcon, RefreshIcon, RestoreIcon, ShieldIcon, SparkIcon } from "./Icons";
+import { motion } from "framer-motion";
 
-/* 夜航后台 → 系统设置: every runtime option lives in the database now (item 4) + S3 backups (item 5) */
+/* 夜航后台 → 系统设置: every runtime option lives in the database (item 4) + S3 backups (item 5).
+ * batch-2 (item 10): left vertical sub-tabs, only the current section on the right, tab kept in ?tab=. */
 
 type Secret = { set: boolean; mask: string };
 type Values = {
-  publicMode: boolean; publicMonitors: boolean; timezone: string;
+  publicMode: boolean; publicMonitors: boolean; timezone: string; siteFailover: boolean;
   aiBaseUrl: string; aiApiKey: Secret; aiModel: string;
   monitorScheduler: boolean; allowPrivateMonitors: boolean; retentionDays: number;
   s3Endpoint: string; s3Region: string; s3Bucket: string; s3AccessKey: string; s3SecretKey: Secret; s3Prefix: string; s3PathStyle: boolean;
@@ -43,14 +45,11 @@ const HOURS: SelectOption[] = Array.from({ length: 24 }, (_, h) => ({ value: Str
 const fmtSize = (n: number) => (n > 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`);
 const fmtTime = (iso: string) => new Date(iso).toLocaleString("zh-CN", { hour12: false });
 
-function Row({ title, desc, children, src }: { title: string; desc?: ReactNode; children: ReactNode; src?: string }) {
+function Row({ title, desc, children }: { title: string; desc?: ReactNode; children: ReactNode }) {
   return (
     <div className="set-row">
       <div className="set-l">
-        <b>
-          {title}
-          {src === "env" && <span className="set-src" title="来自环境变量；在这里保存后以设置为准">环境变量</span>}
-        </b>
+        <b>{title}</b>
         {desc && <small>{desc}</small>}
       </div>
       <div className="set-c">{children}</div>
@@ -58,7 +57,7 @@ function Row({ title, desc, children, src }: { title: string; desc?: ReactNode; 
   );
 }
 
-function Panel({ icon, title, sub, children, foot }: { icon: ReactNode; title: string; sub?: string; children: ReactNode; foot?: ReactNode }) {
+function Panel({ icon, title, sub, children }: { icon: ReactNode; title: string; sub?: string; children: ReactNode }) {
   return (
     <section className="panel set-panel">
       <div className="ph">
@@ -66,12 +65,21 @@ function Panel({ icon, title, sub, children, foot }: { icon: ReactNode; title: s
         {sub && <small>{sub}</small>}
       </div>
       <div className="set-body">{children}</div>
-      {foot && <div className="set-foot">{foot}</div>}
     </section>
   );
 }
 
-export function SettingsPanel() {
+export const SETTING_TABS = [
+  { id: "access", label: "访问与显示", icon: <ShieldIcon /> },
+  { id: "ai", label: "AI", icon: <SparkIcon /> },
+  { id: "monitor", label: "服务监控", icon: <RefreshIcon /> },
+  { id: "backup", label: "备份", icon: <CloudIcon /> },
+  { id: "account", label: "账号", icon: <KeyIcon /> },
+] as const;
+export type SettingTab = (typeof SETTING_TABS)[number]["id"];
+export const isSettingTab = (t: unknown): t is SettingTab => SETTING_TABS.some((x) => x.id === t);
+
+export function SettingsPanel({ tab, onTab }: { tab: SettingTab; onTab: (t: SettingTab) => void }) {
   const toast = useToast();
   const dialog = useDialog();
   const [res, setRes] = useState<SettingsRes | null>(null);
@@ -93,9 +101,15 @@ export function SettingsPanel() {
     void loadBackups();
   }, [load, loadBackups, toast]);
 
+  // narrow screens: the tab row scrolls sideways, keep the current tab in view
+  const ready = !!v;
+  useEffect(() => {
+    const el = document.getElementById(`set-tab-${tab}`), box = el?.parentElement;
+    if (el && box && box.scrollWidth > box.clientWidth) box.scrollTo({ left: el.offsetLeft - (box.clientWidth - el.offsetWidth) / 2, behavior: "smooth" });
+  }, [tab, ready]);
+
   if (!v || !res) return <p className="empty">正在加载设置…</p>;
   const set = <K extends keyof Values>(k: K, val: Values[K]) => setV({ ...v, [k]: val });
-  const src = res.sources;
 
   const run = async (key: string, fn: () => Promise<unknown>, ok?: string) => {
     setBusy(key);
@@ -117,82 +131,120 @@ export function SettingsPanel() {
       const r = await api<SettingsRes>("/api/settings", { method: "PATCH", body });
       setRes(r);
       setV(r.values);
-    }, "设置已保存，立即生效");
+    }, "已保存");
 
   const s3Body = () => ({ s3Endpoint: v.s3Endpoint, s3Region: v.s3Region, s3Bucket: v.s3Bucket, s3AccessKey: v.s3AccessKey, s3Prefix: v.s3Prefix, s3PathStyle: v.s3PathStyle, ...(s3Secret ? { s3SecretKey: s3Secret } : {}) });
   const s3Configured = !!(v.s3Bucket && v.s3AccessKey && v.s3SecretKey.set);
 
   return (
     <div className="settings">
-      <Panel icon={<ShieldIcon />} title="访问与显示" sub="保存后立即生效">
-        <Row title="访客可浏览导航" desc="关闭后，首页与所有数据都需要登录才能查看" src={src.publicMode}>
+      <nav className="set-tabs" role="tablist" aria-label="设置分类" aria-orientation="vertical">
+        {SETTING_TABS.map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            role="tab"
+            id={`set-tab-${t.id}`}
+            aria-selected={tab === t.id}
+            aria-controls="set-pane"
+            tabIndex={tab === t.id ? 0 : -1}
+            className={cn("set-tab", tab === t.id && "on")}
+            onClick={() => onTab(t.id)}
+            onKeyDown={(e) => {
+              const i = SETTING_TABS.findIndex((x) => x.id === tab);
+              const d = e.key === "ArrowDown" || e.key === "ArrowRight" ? 1 : e.key === "ArrowUp" || e.key === "ArrowLeft" ? -1 : 0;
+              if (!d) return;
+              e.preventDefault();
+              const n = SETTING_TABS[(i + d + SETTING_TABS.length) % SETTING_TABS.length].id;
+              onTab(n);
+              requestAnimationFrame(() => document.getElementById(`set-tab-${n}`)?.focus());
+            }}
+          >
+            {tab === t.id && <motion.span layoutId="set-tab-hl" className="rail-hl" transition={{ type: "spring", stiffness: 420, damping: 36 }} />}
+            <span className="set-tab-ic">{t.icon}</span>
+            <span>{t.label}</span>
+          </button>
+        ))}
+      </nav>
+      <motion.div key={tab} id="set-pane" role="tabpanel" aria-labelledby={`set-tab-${tab}`} className="set-pane" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.25 }}>
+      {tab === "access" && (
+      <Panel icon={<ShieldIcon />} title="访问与显示">
+        <Row title="访客可浏览导航" desc="不登录也能打开首页">
           <Switch checked={v.publicMode} onChange={(b) => set("publicMode", b)} label="访客可浏览导航" />
         </Row>
-        <Row title="访客可见服务监控" desc="开启后访客能看到监控卡片（含主机名 / 地址）" src={src.publicMonitors}>
+        <Row title="访客可见服务监控" desc="不登录也能看到服务监控">
           <Switch checked={v.publicMonitors} onChange={(b) => set("publicMonitors", b)} label="访客可见服务监控" />
         </Row>
-        <Row title="时区" desc="用于定时备份的时间与服务器日志" src={src.timezone}>
+        <Row title="自动切换备用链接" desc="主链接打不开时打开备用链接">
+          <Switch checked={v.siteFailover} onChange={(b) => set("siteFailover", b)} label="自动切换备用链接" />
+        </Row>
+        <Row title="时区">
           <Select ariaLabel="时区" value={v.timezone} onChange={(x) => set("timezone", x)} options={TZ.some((o) => o.value === v.timezone) ? TZ : [...TZ, { value: v.timezone, label: v.timezone }]} />
         </Row>
         <div className="set-actions">
-          <Button variant="primary" loading={busy === "access"} onClick={() => save("access", ["publicMode", "publicMonitors", "timezone"])}>保存</Button>
+          <Button variant="primary" loading={busy === "access"} onClick={() => save("access", ["publicMode", "publicMonitors", "siteFailover", "timezone"])}>保存</Button>
         </div>
       </Panel>
+      )}
 
-      <Panel icon={<SparkIcon />} title="AI" sub={res.aiEnabled ? "已启用" : "未配置 · 使用规则模式"}>
-        <Row title="快速填写" desc="任意 OpenAI 兼容的 Chat Completions 接口">
+      {tab === "ai" && (
+      <Panel icon={<SparkIcon />} title="AI" sub={res.aiEnabled ? "已启用" : "未配置"}>
+        <Row title="服务商">
           <Select ariaLabel="AI 服务商" value="" placeholder="选择服务商…" onChange={(id) => { const p = AI_PRESETS.find((x) => x.id === id); if (p) setV({ ...v, aiBaseUrl: p.base, aiModel: p.model }); }} options={AI_PRESETS.map((p) => ({ value: p.id, label: p.label, hint: p.model }))} />
         </Row>
-        <Row title="Base URL" src={src.aiBaseUrl}>
+        <Row title="Base URL">
           <Input value={v.aiBaseUrl} onChange={(e) => set("aiBaseUrl", e.target.value)} placeholder="https://api.deepseek.com/v1" spellCheck={false} aria-label="AI Base URL" />
         </Row>
-        <Row title="API Key" desc={v.aiApiKey.set ? <>已保存（{v.aiApiKey.mask}），留空则不修改</> : "加密保存在数据库中，界面只显示掩码"} src={src.aiApiKey}>
+        <Row title="API Key">
           <div className="set-inline">
             <Input type="password" value={aiKey} onChange={(e) => setAiKey(e.target.value)} placeholder={v.aiApiKey.set ? v.aiApiKey.mask : "sk-…"} autoComplete="off" aria-label="AI API Key" />
             {v.aiApiKey.set && <Button onClick={async () => (await dialog.confirm({ title: "清除 AI API Key？", danger: true, confirmText: "清除" })) && save("aikey", [], { aiApiKey: "" })}>清除</Button>}
           </div>
         </Row>
-        <Row title="模型" src={src.aiModel}>
+        <Row title="模型">
           <Input value={v.aiModel} onChange={(e) => set("aiModel", e.target.value)} placeholder="deepseek-chat" spellCheck={false} aria-label="AI 模型" />
         </Row>
         <div className="set-actions">
-          <Button loading={busy === "aitest"} onClick={() => run("aitest", async () => { const r = await api<{ ms: number; reply: string }>("/api/settings/test-ai", { method: "POST" }); toast(`AI 连接正常 · ${r.ms}ms · “${r.reply}”`); })}>测试连接</Button>
+          <Button loading={busy === "aitest"} onClick={() => run("aitest", async () => { const r = await api<{ ms: number; reply: string }>("/api/settings/test-ai", { body: { aiBaseUrl: v.aiBaseUrl, aiModel: v.aiModel, ...(aiKey ? { aiApiKey: aiKey } : {}) } }); toast(`AI 连接正常 · ${r.ms}ms · “${r.reply}”`); })}>测试连接</Button>
           <Button variant="primary" loading={busy === "ai"} onClick={() => save("ai", ["aiBaseUrl", "aiModel"], aiKey ? { aiApiKey: aiKey } : {}).then((ok) => ok && setAiKey(""))}>保存</Button>
         </div>
-        <p className="set-note">「测试连接」使用已保存的配置，修改后请先保存。</p>
       </Panel>
+      )}
 
+      {tab === "monitor" && (
       <Panel icon={<RefreshIcon />} title="服务监控">
-        <Row title="自动检查" desc="关闭后 HTTP 监控暂停定时检查（服务器探针仍会上报）" src={src.monitorScheduler}>
+        <Row title="自动检查" desc="定时检查网站和 API">
           <Switch checked={v.monitorScheduler} onChange={(b) => set("monitorScheduler", b)} label="自动检查" />
         </Row>
-        <Row title="允许监控内网地址" desc="家庭实验室 / 内网服务需要开启；书签抓取始终禁止访问内网" src={src.allowPrivateMonitors}>
+        <Row title="允许监控内网地址">
           <Switch checked={v.allowPrivateMonitors} onChange={(b) => set("allowPrivateMonitors", b)} label="允许监控内网地址" />
         </Row>
-        <Row title="历史数据保留" desc="单位：天（1–365）" src={src.retentionDays}>
+        <Row title="历史数据保留天数">
           <Input type="number" min={1} max={365} value={v.retentionDays} onChange={(e) => set("retentionDays", Number(e.target.value))} aria-label="保留天数" style={{ maxWidth: 140 }} />
         </Row>
         <div className="set-actions">
           <Button variant="primary" loading={busy === "mon"} onClick={() => save("mon", ["monitorScheduler", "allowPrivateMonitors", "retentionDays"])}>保存</Button>
         </div>
       </Panel>
+      )}
 
-      <Panel icon={<CloudIcon />} title="备份到 S3" sub="兼容 AWS S3 / Cloudflare R2 / MinIO / B2 等">
-        <Row title="快速填写">
+      {tab === "backup" && (
+      <Panel icon={<CloudIcon />} title="备份到 S3" sub="把书签、监控和设置备份到 S3">
+        <Row title="服务商">
           <Select ariaLabel="S3 服务商" value="" placeholder="选择服务商…" onChange={(id) => { const p = S3_PRESETS.find((x) => x.id === id); if (p) setV({ ...v, s3Endpoint: p.endpoint, s3Region: p.region, s3PathStyle: p.pathStyle }); }} options={S3_PRESETS.map((p) => ({ value: p.id, label: p.label }))} />
         </Row>
-        <Row title="Endpoint" desc="AWS 留空；其他服务填它们的 S3 API 地址">
+        <Row title="Endpoint">
           <Input value={v.s3Endpoint} onChange={(e) => set("s3Endpoint", e.target.value)} placeholder="https://<account>.r2.cloudflarestorage.com" spellCheck={false} aria-label="S3 Endpoint" />
         </Row>
         <div className="set-grid">
           <Row title="Region"><Input value={v.s3Region} onChange={(e) => set("s3Region", e.target.value)} placeholder="auto" aria-label="Region" /></Row>
           <Row title="Bucket"><Input value={v.s3Bucket} onChange={(e) => set("s3Bucket", e.target.value)} placeholder="my-backups" aria-label="Bucket" /></Row>
           <Row title="Access Key"><Input value={v.s3AccessKey} onChange={(e) => set("s3AccessKey", e.target.value)} autoComplete="off" spellCheck={false} aria-label="Access Key" /></Row>
-          <Row title="Secret Key" desc={v.s3SecretKey.set ? `已保存（${v.s3SecretKey.mask}）` : undefined}>
-            <Input type="password" value={s3Secret} onChange={(e) => setS3Secret(e.target.value)} placeholder={v.s3SecretKey.set ? "留空则不修改" : ""} autoComplete="off" aria-label="Secret Key" />
+          <Row title="Secret Key">
+            <Input type="password" value={s3Secret} onChange={(e) => setS3Secret(e.target.value)} placeholder={v.s3SecretKey.set ? v.s3SecretKey.mask : ""} autoComplete="off" aria-label="Secret Key" />
           </Row>
           <Row title="路径前缀"><Input value={v.s3Prefix} onChange={(e) => set("s3Prefix", e.target.value)} placeholder="nocta-backups" aria-label="路径前缀" /></Row>
-          <Row title="Path-style 访问" desc="MinIO / R2 通常开启"><Switch checked={v.s3PathStyle} onChange={(b) => set("s3PathStyle", b)} label="Path-style" /></Row>
+          <Row title="Path-style 访问"><Switch checked={v.s3PathStyle} onChange={(b) => set("s3PathStyle", b)} label="Path-style" /></Row>
         </div>
         <div className="set-actions">
           <Button loading={busy === "s3test"} onClick={() => run("s3test", async () => { const r = await api<{ ms: number }>("/api/backup/test", { body: s3Body() }); toast(`连接成功，可读写 · ${r.ms}ms`); })}>测试连接</Button>
@@ -225,12 +277,10 @@ export function SettingsPanel() {
             上次{backups.last.trigger === "scheduled" ? "自动" : backups.last.trigger === "pre-restore" ? "恢复前" : "手动"}备份：{fmtTime(backups.last.at)} · {backups.last.ok ? `成功（${fmtSize(backups.last.size ?? 0)}）` : `失败：${backups.last.error}`}
           </p>
         )}
-        {!s3Configured ? (
-          <p className="set-note">填写并保存 S3 配置后即可备份。备份内容：系统设置（不含密钥和密码）+ 全部站点、收藏、分类、监控及监控历史 + 图标。</p>
-        ) : backups?.error ? (
+        {!s3Configured ? null : backups?.error ? (
           <p className="set-note bad">{backups.error}</p>
         ) : backups && !backups.items.length ? (
-          <p className="set-note">还没有备份。</p>
+          <p className="set-note">还没有备份</p>
         ) : (
           <ul className="bk-list">
             {backups?.items.map((b) => (
@@ -246,7 +296,7 @@ export function SettingsPanel() {
                   onClick={async () => {
                     const ok = await dialog.confirm({
                       title: "用这个备份覆盖当前数据？",
-                      message: <>将恢复 {fmtTime(b.at)} 的备份：当前所有站点、收藏、分类、监控和监控历史都会被替换。恢复前会自动再做一次备份，可随时恢复回来。密码、AI Key 与 S3 配置保持不变。</>,
+                      message: <>当前的站点、收藏、分类和监控数据都会被 {fmtTime(b.at)} 的备份替换。恢复前会自动备份当前数据。</>,
                       confirmText: "恢复",
                       danger: true,
                     });
@@ -265,8 +315,11 @@ export function SettingsPanel() {
           </ul>
         )}
       </Panel>
+      )}
 
-      <Panel icon={<KeyIcon />} title="管理员密码" sub={res.password === "env" ? "当前使用环境变量 ADMIN_PASSWORD，在这里设置后以此为准" : undefined}>
+      {tab === "account" && (
+      <>
+      <Panel icon={<KeyIcon />} title="管理员密码">
         <form
           className="set-pw"
           onSubmit={(e) => {
@@ -286,11 +339,17 @@ export function SettingsPanel() {
           <Button type="submit" variant="primary" loading={busy === "pw"} disabled={!pw.current || !pw.next}>修改密码</Button>
         </form>
       </Panel>
-
-      <div className="field">
-        <div className="fl"><b>退出登录</b><small>清除当前浏览器的管理员会话</small></div>
-        <Button variant="danger" onClick={async () => { await api("/api/auth/logout", { method: "POST" }); location.href = "/"; }}><LogoutIcon /> 退出登录</Button>
-      </div>
+      <section className="panel set-panel">
+        <div className="set-row" style={{ borderTop: 0 }}>
+          <div className="set-l"><b>退出登录</b></div>
+          <div className="set-c">
+            <Button variant="danger" onClick={async () => { await api("/api/auth/logout", { method: "POST" }); location.href = "/"; }}><LogoutIcon /> 退出登录</Button>
+          </div>
+        </div>
+      </section>
+      </>
+      )}
+      </motion.div>
     </div>
   );
 }

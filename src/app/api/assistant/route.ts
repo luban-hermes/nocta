@@ -126,7 +126,7 @@ export async function POST(req: Request) {
         const force = plan.action === "add_site" ? "site" : plan.action === "add_content" ? "content" : undefined;
         const r = await addByUrl(plan.url, force);
         if (r.kind === "site") {
-          return json({ action: "add_site", reply: `已添加到「站点导航」：${r.site.name}${r.fetched ? "" : "（页面抓取失败，已用域名代替，可稍后编辑）"}`, created: { kind: "site", item: siteDTO(r.site) } });
+          return json({ action: "add_site", reply: `已添加到「站点导航」：${r.site.name}${r.fetched ? "" : "（没能读取页面信息）"}`, created: { kind: "site", item: siteDTO(r.site) } });
         }
         const c = contentDTO(r.content);
         return json({ action: "add_content", reply: `已收藏到「收藏内容」：${c.title}${c.tags.length ? `\n标签：${c.tags.join(" · ")}` : ""}${c.summary ? `\n${r.usedAi ? "AI 摘要" : "摘要"}：${c.summary}` : ""}`, created: { kind: "content", item: c } });

@@ -35,15 +35,14 @@ export function SetupForm() {
           <BrandOrb />
           <span>夜航 Nocta</span>
         </div>
-        <h1 style={{ fontSize: 20, fontWeight: 600 }}>欢迎，先设置管理员密码</h1>
-        <p className="sub">只需这一步。AI、公开访问、监控、备份等其他配置都可以稍后在「夜航后台 → 系统设置」里修改。</p>
+        <h1 style={{ fontSize: 20, fontWeight: 600, marginBottom: 18 }}>设置管理员密码</h1>
         <div className="f-grid">
           <Input type="password" value={pw} onChange={(e) => setPw(e.target.value)} placeholder="管理员密码（至少 8 位）" autoFocus autoComplete="new-password" aria-label="管理员密码" />
           <Input type="password" value={pw2} onChange={(e) => setPw2(e.target.value)} placeholder="再输入一次" autoComplete="new-password" aria-label="确认密码" />
           <div className="setup-row">
             <span>
               <b>访客可浏览导航</b>
-              <small>关闭后所有页面都需要登录</small>
+              <small>不登录也能打开首页</small>
             </span>
             <Switch checked={pub} onChange={setPub} label="访客可浏览导航" />
           </div>

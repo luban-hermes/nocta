@@ -26,7 +26,7 @@ const CHIPS = [
 export function Assistant({ open, setOpen, admin, aiEnabled, refresh, onOpenItem }: { open: boolean; setOpen: (v: boolean) => void; admin: boolean; aiEnabled: boolean; refresh: () => Promise<void>; onOpenItem: (type: "content" | "monitor", id: string) => void }) {
   const toast = useToast();
   const [msgs, setMsgs] = useState<Msg[]>([
-    { id: 0, me: false, text: `你好，我是夜航 AI 助手${aiEnabled ? "" : "（规则模式）"}。\n粘贴网址、SSH 命令或 API 地址，我会帮你加到合适的位置。${admin ? "" : "\n\n添加内容需要先登录后台。"}` },
+    { id: 0, me: false, text: admin ? "粘贴网址、SSH 或 API，我来添加" : "搜索站点、收藏和监控" },
   ]);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);

@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import { ArrowDownIcon, ArrowUpIcon, PinIcon, PlayIcon, SparkIcon, WarnIcon } from "./Icons";
 import { useLongPress } from "./ui/context-menu";
 import { mergeHandlers, type HandleProps } from "./ui/sortable";
+import { linkState, openSite, siteLinks, useProbes } from "@/lib/linkprobe";
 
 /* ---------- icon tile: cached server-side icon; the letter tile is only the very last resort ---------- */
 /** an <img> that reports failures even when they happened before hydration */
@@ -31,12 +32,24 @@ export function Tile({ src, name, size }: { src?: string; name: string; size?: "
   );
 }
 
-const enter = (i: number) => ({ initial: { opacity: 0, y: 16 }, animate: { opacity: 1, y: 0 }, transition: { duration: 0.4, delay: Math.min(i, 20) * 0.03, ease: [0.22, 1, 0.36, 1] as const } });
+const enter = (i: number, still?: boolean) => still ? { initial: false as const } : ({ initial: { opacity: 0, y: 16 }, animate: { opacity: 1, y: 0 }, transition: { duration: 0.4, delay: Math.min(i, 20) * 0.03, ease: [0.22, 1, 0.36, 1] as const } });
 
-type CardEvents = { handle?: HandleProps; onMenu?: (x: number, y: number) => void };
+type CardEvents = { handle?: HandleProps; onMenu?: (x: number, y: number) => void; /** static copy drawn in the drag overlay */ overlay?: boolean };
+
+/* ---------- reachability of one link, as seen from this browser (item 13) ---------- */
+export function LinkDot({ url }: { url: string }) {
+  useProbes();
+  const st = linkState(url)?.status;
+  return <i className={cn("ln-dot", st)} aria-label={st === "ok" ? "可用" : st === "down" ? "不可用" : st === "checking" ? "检测中" : "未检测"} />;
+}
+export function LinkLatency({ url }: { url: string }) {
+  useProbes();
+  const st = linkState(url);
+  return <small className="ln-ms">{st?.status === "ok" ? `${st.ms}ms` : st?.status === "down" ? "不可用" : st?.status === "checking" ? "…" : ""}</small>;
+}
 
 /* ---------- site card: icon + name, click opens URL; right-click / long-press opens the menu ---------- */
-export function SiteCard({ site, index, handle, onMenu }: { site: SiteDTO; index: number } & CardEvents) {
+export function SiteCard({ site, index, handle, onMenu, overlay, failover }: { site: SiteDTO; index: number; failover?: boolean } & CardEvents) {
   const [hot, setHot] = useState(false);
   const lp = useLongPress(onMenu ?? null);
   const move = (e: PointerEvent<HTMLAnchorElement>) => {
@@ -49,15 +62,20 @@ export function SiteCard({ site, index, handle, onMenu }: { site: SiteDTO; index
     el.style.setProperty("--ry", `${(x - 0.5) * 12}deg`);
   };
   return (
-    <motion.div {...enter(index)}>
+    <motion.div {...enter(index, overlay)}>
       <a
         {...mergeHandlers(handle, lp)}
-        className={cn("site", hot && "is-hot")}
+        className={cn("site", hot && !overlay && "is-hot")}
         href={site.url}
         target="_blank"
         rel="noopener noreferrer"
-        title={site.description || site.url}
         draggable={false}
+        onClick={(e) => {
+          // multi-link site: open the first link that is reachable from here (primary first)
+          if (!failover || !site.backups.length || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+          e.preventDefault();
+          void openSite(siteLinks(site).map((l) => l.url));
+        }}
         onPointerEnter={(e) => e.pointerType === "mouse" && setHot(true)}
         onPointerMove={move}
         onPointerLeave={() => setHot(false)}
@@ -77,7 +95,7 @@ export function SiteCard({ site, index, handle, onMenu }: { site: SiteDTO; index
         }}
       >
         {site.pinned && (
-          <span className="pin" title="已置顶">
+          <span className="pin" aria-label="已置顶">
             <PinIcon />
           </span>
         )}
@@ -107,10 +125,10 @@ export function Cover({ c, className }: { c: ContentDTO; className?: string }) {
   );
 }
 
-export function ContentCard({ c, index, onOpen, handle, onMenu }: { c: ContentDTO; index: number; onOpen: () => void } & CardEvents) {
+export function ContentCard({ c, index, onOpen, handle, onMenu, overlay }: { c: ContentDTO; index: number; onOpen: () => void } & CardEvents) {
   const lp = useLongPress(onMenu ?? null);
   return (
-    <motion.div {...enter(index)}>
+    <motion.div {...enter(index, overlay)}>
     <article
       {...mergeHandlers(handle, lp)}
       className="item"
@@ -138,7 +156,7 @@ export function ContentCard({ c, index, onOpen, handle, onMenu }: { c: ContentDT
         <div className="irow">
           <span className="badge">{TYPE_LABEL[c.type]}</span>
           {c.pinned && (
-            <span className="badge pinb" title="已置顶">
+            <span className="badge pinb">
               <PinIcon size={11} /> 置顶
             </span>
           )}
@@ -166,7 +184,7 @@ export function ContentCard({ c, index, onOpen, handle, onMenu }: { c: ContentDT
           <span className="dom">{c.domain}</span>
           <span className="sep">·</span>
           <span suppressHydrationWarning>{ago(c.createdAt)}</span>
-          <span className={cn("unread", c.read && "off")} title={c.read ? "已读" : "未读"} />
+          <span className={cn("unread", c.read && "off")} aria-label={c.read ? "已读" : "未读"} />
         </div>
       </div>
     </article>
@@ -229,7 +247,7 @@ export function MonitorCard({ m, index, onOpen }: { m: MonitorDTO; index: number
       </div>
       {m.kind === "server" ? (
         <>
-          <p className="x-mon__os">{m.os || (m.lastReportAt ? m.hostname : "尚未收到探针数据 · 点击查看安装命令")}</p>
+          <p className="x-mon__os">{m.os || (m.lastReportAt ? m.hostname : "等待数据")}</p>
           {m.alert && <span className="x-mon__alert"><WarnIcon /> {m.alert}</span>}
           <div className="x-gauges">
             <Gauge label="CPU" value={m.cpu} />

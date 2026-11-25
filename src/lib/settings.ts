@@ -23,6 +23,8 @@ export const DEFS = {
   allowPrivateMonitors: { kind: "bool", def: true, env: "ALLOW_PRIVATE_MONITORS" },
   retentionDays: { kind: "int", def: 7, env: "MONITOR_RETENTION_DAYS", min: 1, max: 365 },
   timezone: { kind: "string", def: "", env: "TZ", max_len: 64 },
+  // multi-link sites (item 13): left click falls back to the first reachable backup link
+  siteFailover: { kind: "bool", def: true },
   // S3-compatible backup (item 5)
   s3Endpoint: { kind: "string", def: "", max_len: 300 },
   s3Region: { kind: "string", def: "auto", max_len: 64 },

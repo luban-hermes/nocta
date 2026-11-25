@@ -15,11 +15,11 @@ import { DEFS, getInternal, getSettings, saveSettings, setInternal, type Setting
  */
 
 export const FORMAT = "nocta-backup";
-const VERSION = 1;
+const VERSION = 2; // v2 (batch-2): + siteLinks
 const NAME_RE = /nocta-backup-\d{8}-\d{6}(?:-[a-z-]+)?\.json\.gz$/;
 
 /** settings that travel with a backup (connection details for the backup target itself stay as they are) */
-const PORTABLE: SettingKey[] = ["publicMode", "publicMonitors", "aiBaseUrl", "aiModel", "monitorScheduler", "allowPrivateMonitors", "retentionDays", "timezone"];
+const PORTABLE: SettingKey[] = ["publicMode", "publicMonitors", "aiBaseUrl", "aiModel", "monitorScheduler", "allowPrivateMonitors", "retentionDays", "timezone", "siteFailover"];
 
 export type S3Conf = Pick<Settings, "s3Endpoint" | "s3Region" | "s3Bucket" | "s3AccessKey" | "s3SecretKey" | "s3Prefix" | "s3PathStyle">;
 
@@ -88,15 +88,16 @@ type Dump = {
   version: number;
   createdAt: string;
   settings: Partial<Record<SettingKey, unknown>>;
-  data: { categories: unknown[]; sites: unknown[]; contents: unknown[]; monitors: unknown[]; checks: unknown[]; metrics: unknown[] };
+  data: { categories: unknown[]; sites: unknown[]; siteLinks?: unknown[]; contents: unknown[]; monitors: unknown[]; checks: unknown[]; metrics: unknown[] };
   icons: Record<string, string>;
 };
 
 export async function buildDump(): Promise<Dump> {
   const s = await getSettings();
-  const [categories, sites, contents, monitors, checks, metrics] = await Promise.all([
+  const [categories, sites, siteLinks, contents, monitors, checks, metrics] = await Promise.all([
     prisma.category.findMany(),
     prisma.site.findMany(),
+    prisma.siteLink.findMany(),
     prisma.content.findMany(),
     prisma.monitor.findMany(),
     prisma.check.findMany(),
@@ -111,7 +112,7 @@ export async function buildDump(): Promise<Dump> {
     version: VERSION,
     createdAt: new Date().toISOString(),
     settings: Object.fromEntries(PORTABLE.map((k) => [k, s[k]])),
-    data: { categories, sites, contents, monitors, checks, metrics },
+    data: { categories, sites, siteLinks, contents, monitors, checks, metrics },
     icons,
   };
 }
@@ -217,12 +218,14 @@ export async function restoreBackup(key: string) {
   await runBackup("pre-restore");
 
   const d = dump.data;
-  const stats = { categories: d.categories.length, sites: d.sites.length, contents: d.contents.length, monitors: d.monitors.length, checks: d.checks.length, metrics: d.metrics.length };
+  const siteLinks = d.siteLinks ?? []; // v1 backups have none
+  const stats = { categories: d.categories.length, sites: d.sites.length, siteLinks: siteLinks.length, contents: d.contents.length, monitors: d.monitors.length, checks: d.checks.length, metrics: d.metrics.length };
   await prisma.$transaction(
     async (tx) => {
       await tx.check.deleteMany();
       await tx.metric.deleteMany();
       await tx.monitor.deleteMany();
+      await tx.siteLink.deleteMany();
       await tx.site.deleteMany();
       await tx.content.deleteMany();
       await tx.category.deleteMany();
@@ -231,6 +234,7 @@ export async function restoreBackup(key: string) {
       };
       await chunk(dates(d.categories, ["createdAt"]), (p) => tx.category.createMany({ data: p as never }));
       await chunk(dates(d.sites, ["createdAt", "updatedAt", "iconCheckedAt"]), (p) => tx.site.createMany({ data: p as never }));
+      await chunk(dates(siteLinks, ["createdAt"]), (p) => tx.siteLink.createMany({ data: p as never }));
       await chunk(dates(d.contents, ["createdAt", "updatedAt", "iconCheckedAt"]), (p) => tx.content.createMany({ data: p as never }));
       await chunk(dates(d.monitors, ["sslExpiresAt", "lastCheckedAt", "lastReportAt", "createdAt", "updatedAt"]), (p) => tx.monitor.createMany({ data: p as never }));
       await chunk(dates(d.checks, ["createdAt"]), (p) => tx.check.createMany({ data: p as never }));

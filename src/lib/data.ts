@@ -1,5 +1,5 @@
 import "server-only";
-import type { Category, Content, Monitor, Site } from "@prisma/client";
+import type { Category, Content, Monitor, Site, SiteLink } from "@prisma/client";
 import { prisma } from "./db";
 import { getSettings } from "./settings";
 import { isAdmin } from "./auth";
@@ -12,10 +12,12 @@ const TICKS = 48; // 24h in 30-minute buckets
 const iconUrl = (kind: "site" | "content", r: { id: string; iconFile: string; iconCheckedAt: Date | null }) =>
   r.iconFile ? `/api/icon/${kind}/${r.id}?v=${(r.iconCheckedAt?.getTime() ?? 0).toString(36)}${r.iconFile.slice(-6).replace(/\W/g, "")}` : "";
 
-export const siteDTO = (s: Site): SiteDTO => ({
+export const siteDTO = (s: Site & { links?: SiteLink[] }): SiteDTO => ({
   id: s.id,
   name: s.name,
   url: s.url,
+  urlNote: s.urlNote ?? "",
+  backups: [...(s.links ?? [])].sort((a, b) => a.sort - b.sort).map((l) => ({ id: l.id, url: l.url, note: l.note })),
   description: s.description,
   favicon: s.favicon,
   icon: iconUrl("site", s),
@@ -139,7 +141,7 @@ export async function loadAppData(): Promise<AppData> {
   const showMonitors = admin || env.publicMonitors;
   const [cats, sites, contents, monitors] = await Promise.all([
     prisma.category.findMany({ orderBy: [{ kind: "asc" }, { sort: "asc" }, { createdAt: "asc" }], include: { _count: { select: { sites: true, contents: true } } } }),
-    prisma.site.findMany({ orderBy: [{ pinned: "desc" }, { sort: "asc" }, { createdAt: "asc" }] }),
+    prisma.site.findMany({ orderBy: [{ pinned: "desc" }, { sort: "asc" }, { createdAt: "asc" }], include: { links: { orderBy: { sort: "asc" } } } }),
     prisma.content.findMany({ orderBy: [{ pinned: "desc" }, { sort: "asc" }, { createdAt: "desc" }] }),
     showMonitors ? prisma.monitor.findMany({ orderBy: { createdAt: "asc" } }) : Promise.resolve([] as Monitor[]),
   ]);
@@ -156,6 +158,7 @@ export async function loadAppData(): Promise<AppData> {
     publicMode: env.publicMode,
     showMonitors,
     aiEnabled: env.aiEnabled,
+    siteFailover: env.siteFailover,
     categories,
     sites: sites.map(siteDTO),
     contents: contents.map(contentDTO),

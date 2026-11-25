@@ -11,12 +11,13 @@ import { UIProvider, useDialog } from "./ui/dialog";
 import { useToast } from "./ui/toast";
 import { ContextMenu, type MenuItem, type MenuState } from "./ui/context-menu";
 import { SortItem, SortList, type HandleProps } from "./ui/sortable";
-import { ContentCard, MonitorCard, SiteCard } from "./Cards";
+import { ContentCard, LinkDot, LinkLatency, MonitorCard, SiteCard } from "./Cards";
 import { Drawer, type DrawerTarget } from "./Drawer";
 import { CommandPalette } from "./CommandPalette";
 import { AddDialog } from "./AddDialog";
 import { Assistant } from "./Assistant";
-import { ArrowUpIcon, CatIcon, CopyIcon, EditIcon, ExternalIcon, MoveIcon, OpenIcon, PinIcon, PinOffIcon, PlusIcon, RefreshIcon, SearchIcon, SparkIcon, TrashIcon } from "./Icons";
+import { ArrowUpIcon, CatIcon, CopyIcon, EditIcon, ExternalIcon, LinkIcon, MoveIcon, OpenIcon, PinIcon, PinOffIcon, PlusIcon, RefreshIcon, SearchIcon, TrashIcon } from "./Icons";
+import { probeAll, siteLinks } from "@/lib/linkprobe";
 
 type Tab = "sites" | "contents" | "monitors";
 type RailItem = { id: string; name: string; icon: string; n: number; sortable?: boolean };
@@ -36,6 +37,8 @@ export function NoctaApp({ initial }: { initial: AppData }) {
     </UIProvider>
   );
 }
+
+const shortUrl = (u: string) => u.replace(/^https?:\/\//, "").replace(/\/$/, "");
 
 /** keep the relative order of the items outside `subset` and put the subset's new order into its old slots */
 function mergeOrder(all: string[], subsetNew: string[]) {
@@ -70,6 +73,35 @@ function Masonry({ count, min = 290, gap = 16, children }: { count: number; min?
           {Array.from({ length: Math.ceil((count - c) / cols) }, (_, r) => children(r * cols + c))}
         </div>
       ))}
+    </div>
+  );
+}
+
+/**
+ * site grid (item 12): normal auto-fill grid; when there are fewer cards than columns, the row keeps the
+ * same card size and is centred instead of leaving empty columns on the right.
+ */
+function SiteGrid({ count, children }: { count: number; children: ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [few, setFew] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const fit = () => {
+      const narrow = matchMedia("(max-width:640px)").matches;
+      const min = narrow ? 88 : 118, gap = narrow ? 10 : 14;
+      const w = el.clientWidth;
+      const cols = Math.max(1, Math.floor((w + gap) / (min + gap)));
+      setFew(count < cols ? Math.floor((w - (cols - 1) * gap) / cols) : null);
+    };
+    fit();
+    const ro = new ResizeObserver(fit);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [count]);
+  return (
+    <div ref={ref} className="sites" style={few ? { gridTemplateColumns: `repeat(${count},${few}px)`, justifyContent: "center" } : undefined}>
+      {children}
     </div>
   );
 }
@@ -127,6 +159,21 @@ function App({ initial }: { initial: AppData }) {
       removeEventListener("scroll", onScroll);
     };
   }, []);
+
+  // multi-link sites (item 13): when the browser is idle, check which links answer from this network
+  const linkKey = data.sites.filter((s) => s.backups.length).map((s) => siteLinks(s).map((l) => l.url).join(" ")).join("\n");
+  useEffect(() => {
+    if (!linkKey) return;
+    const urls = linkKey.split(/\s+/).filter(Boolean);
+    const ric = (window as unknown as { requestIdleCallback?: (f: () => void, o?: { timeout: number }) => number }).requestIdleCallback;
+    const id = ric ? ric(() => void probeAll(urls), { timeout: 4000 }) : window.setTimeout(() => void probeAll(urls), 1500);
+    const again = window.setInterval(() => !document.hidden && void probeAll(urls), 5 * 60_000 + 1000);
+    return () => {
+      (window as unknown as { cancelIdleCallback?: (n: number) => void }).cancelIdleCallback?.(id);
+      clearTimeout(id);
+      clearInterval(again);
+    };
+  }, [linkKey]);
 
   useEffect(() => {
     document.body.classList.toggle("x-chat-open", chat);
@@ -243,9 +290,31 @@ function App({ initial }: { initial: AppData }) {
       ],
     },
   });
+  const addBackup = async (s: SiteDTO) => {
+    const url = await dialog.prompt({ title: `给「${s.name}」添加备用链接`, placeholder: "https://", confirmText: "添加", validate: (v) => (v.trim() ? null : "请输入链接") });
+    if (url) await act(() => api(`/api/sites/${s.id}/links`, { body: { url } }), "已添加备用链接");
+  };
   const siteMenu = (s: SiteDTO) => (x: number, y: number) => {
+    const links = siteLinks(s);
+    if (links.length > 1) void probeAll(links.map((l) => l.url));
     const items: MenuItem[] = [
-      { key: "open", label: "打开", icon: <OpenIcon />, onSelect: () => location.assign(s.url) },
+      links.length > 1
+        ? {
+            key: "open",
+            label: "打开",
+            icon: <OpenIcon />,
+            submenu: {
+              title: "打开",
+              items: links.map((l, i) => ({
+                key: `l${i}`,
+                label: l.note || shortUrl(l.url),
+                icon: <LinkDot url={l.url} />,
+                hint: <LinkLatency url={l.url} />,
+                onSelect: () => window.open(l.url, "_blank", "noopener"),
+              })),
+            },
+          }
+        : { key: "open", label: "打开", icon: <OpenIcon />, onSelect: () => location.assign(s.url) },
       { key: "tab", label: "在新标签页打开", icon: <ExternalIcon />, onSelect: () => window.open(s.url, "_blank", "noopener") },
       { key: "copy", label: "复制链接", icon: <CopyIcon />, onSelect: () => copyLink(s.url) },
     ];
@@ -255,6 +324,7 @@ function App({ initial }: { initial: AppData }) {
         { key: "edit", label: "编辑", icon: <EditIcon />, onSelect: () => setDrawer({ type: "site", id: s.id, edit: true }) },
         { key: "pin", label: s.pinned ? "取消置顶" : "置顶", icon: s.pinned ? <PinOffIcon /> : <PinIcon size={15} />, onSelect: () => act(() => api(`/api/sites/${s.id}`, { method: "PATCH", body: { pinned: !s.pinned } }), s.pinned ? "已取消置顶" : "已置顶") },
         moveItems("site", s.id, s.categoryId),
+        { key: "backup", label: "添加备用链接", icon: <LinkIcon />, onSelect: () => void addBackup(s) },
         { key: "icon", label: "重新抓取图标", icon: <RefreshIcon />, onSelect: () => act(() => api(`/api/icon/site/${s.id}`, { body: { refetch: true } }), "已重新抓取图标") },
         { sep: true, key: "s2" },
         { key: "del", label: "删除", icon: <TrashIcon />, danger: true, onSelect: async () => (await dialog.confirm({ title: `删除站点「${s.name}」？`, message: "删除后无法恢复。", danger: true })) && act(() => api(`/api/sites/${s.id}`, { method: "DELETE" }), "已删除") },
@@ -336,7 +406,7 @@ function App({ initial }: { initial: AppData }) {
             <p className="rail-title">{tab === "sites" ? "站点分类" : tab === "contents" ? "内容分类" : "监控筛选"}</p>
             <nav className="rail-list">
               {rail.filter((r) => !r.sortable && r.id === "all").map((r) => railBtn(r))}
-              <SortList key={tab} ids={railCats.map((r) => r.id)} enabled={admin && tab !== "monitors"} onReorder={(ids) => reorderCats(tab === "sites" ? "site" : "content", ids)}>
+              <SortList key={tab} ids={railCats.map((r) => r.id)} enabled={admin && tab !== "monitors"} onReorder={(ids) => reorderCats(tab === "sites" ? "site" : "content", ids)} overlay={(id) => { const r = railCats.find((x) => x.id === id); return r ? <div className="rail-sort">{railBtn(r)}</div> : null; }}>
                 {railCats.map((r) => (
                   <SortItem key={r.id} id={r.id} className="rail-sort">
                     {(h) => railBtn(r, h)}
@@ -345,37 +415,30 @@ function App({ initial }: { initial: AppData }) {
               </SortList>
               {rail.filter((r) => !r.sortable && r.id !== "all").map((r) => railBtn(r))}
             </nav>
-            {tab !== "monitors" && admin && (
-              <div className="rail-foot">
-                <p><span className="spark"><SparkIcon size={12} /></span> {data.aiEnabled ? "AI 已连接" : "规则模式"}</p>
-                <small>{data.aiEnabled ? "新链接会自动摘要、打标签、归类" : "在后台「设置」里配置 AI 后启用"}</small>
-                <small className="rail-tip">右键卡片打开菜单，拖动可排序</small>
-              </div>
-            )}
           </aside>
 
           <div className="content" style={{ minWidth: 0 }}>
             {tab === "sites" && (
               <section className="block" role="tabpanel">
                 {sites.length ? (
-                  <SortList ids={sites.map((s) => s.id)} enabled={admin} onReorder={reorderSites}>
-                    <div className="sites">
+                  <SortList ids={sites.map((s) => s.id)} enabled={admin} onReorder={reorderSites} overlay={(id) => { const s = sites.find((x) => x.id === id); return s ? <SiteCard site={s} index={0} overlay /> : null; }}>
+                    <SiteGrid count={sites.length}>
                       {sites.map((s, i) => (
                         <SortItem key={s.id} id={s.id}>
-                          {(h) => <SiteCard site={s} index={i} handle={h} onMenu={siteMenu(s)} />}
+                          {(h) => <SiteCard site={s} index={i} handle={h} onMenu={siteMenu(s)} failover={data.siteFailover} />}
                         </SortItem>
                       ))}
-                    </div>
+                    </SiteGrid>
                   </SortList>
                 ) : (
-                  <p className="empty">{admin ? "这个分类还没有站点，点右上角「添加」或让 AI 助手帮你添加。" : "这个分类还没有站点。"}</p>
+                  <p className="empty">还没有站点</p>
                 )}
               </section>
             )}
             {tab === "contents" && (
               <section className="block" role="tabpanel">
                 {contents.length ? (
-                  <SortList ids={contents.map((c) => c.id)} enabled={admin} onReorder={reorderContents}>
+                  <SortList ids={contents.map((c) => c.id)} enabled={admin} onReorder={reorderContents} overlay={(id) => { const c = contents.find((x) => x.id === id); return c ? <ContentCard c={c} index={0} overlay onOpen={() => {}} /> : null; }}>
                     <Masonry count={contents.length}>
                       {(i) => {
                         const c = contents[i];
@@ -388,7 +451,7 @@ function App({ initial }: { initial: AppData }) {
                     </Masonry>
                   </SortList>
                 ) : (
-                  <p className="empty">{admin ? "这个分类还没有收藏，粘贴一个文章 / 视频 / 仓库链接试试。" : "这个分类还没有收藏。"}</p>
+                  <p className="empty">还没有收藏</p>
                 )}
               </section>
             )}
@@ -398,7 +461,6 @@ function App({ initial }: { initial: AppData }) {
                   <span><i className="x-sd" />在线 {sum.up}</span>
                   <span><i className="x-sd warn" />告警 {sum.warn}</span>
                   <span><i className="x-sd bad" />离线 {sum.down}</span>
-                  <small>每 15 秒刷新</small>
                 </p>
                 {monitors.length ? (
                   <div className="x-mgrid">
@@ -407,7 +469,7 @@ function App({ initial }: { initial: AppData }) {
                     ))}
                   </div>
                 ) : (
-                  <p className="empty">{current === "bad" ? "一切正常。" : admin ? "还没有监控。「添加」一个 API 地址，或粘贴 SSH 命令添加服务器。" : "还没有监控。"}</p>
+                  <p className="empty">{current === "bad" ? "一切正常" : "还没有监控"}</p>
                 )}
               </section>
             )}

@@ -32,8 +32,7 @@ export function LoginForm({ next, publicMode }: { next: string; publicMode: bool
           <BrandOrb />
           <span>夜航后台</span>
         </div>
-        <h1 style={{ fontSize: 20, fontWeight: 600 }}>管理员登录</h1>
-        <p className="sub" style={{ fontSize: 13, color: "var(--text3)", margin: "6px 0 18px" }}>输入管理员密码。忘记密码：用环境变量 NOCTA_RESET_PASSWORD=1 启动一次即可重新设置（见 README）。</p>
+        <h1 style={{ fontSize: 20, fontWeight: 600, marginBottom: 18 }}>管理员登录</h1>
         <Input type="password" value={pw} onChange={(e) => setPw(e.target.value)} placeholder="密码" autoFocus autoComplete="current-password" aria-label="密码" />
         <p className="f-err" role="alert" style={{ margin: "8px 2px" }}>{err}</p>
         <Button type="submit" variant="primary" loading={busy} disabled={!pw} style={{ width: "100%", height: 44 }}>

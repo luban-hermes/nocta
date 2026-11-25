@@ -8,7 +8,7 @@ import { onEscapeCapture, place, type Placement } from "./floating";
 
 export type MenuItem =
   | { sep: true; key: string }
-  | { sep?: false; key: string; label: string; icon?: ReactNode; onSelect?: () => void; danger?: boolean; disabled?: boolean; checked?: boolean; submenu?: { title: string; items: MenuItem[] } };
+  | { sep?: false; key: string; label: string; icon?: ReactNode; onSelect?: () => void; hint?: ReactNode; danger?: boolean; disabled?: boolean; checked?: boolean; submenu?: { title: string; items: MenuItem[] } };
 export type MenuState = { x: number; y: number; title?: string; items: MenuItem[] } | null;
 
 type Panel = { title?: string; items: MenuItem[] };
@@ -140,6 +140,7 @@ function MenuView({ state, onClose }: { state: NonNullable<MenuState>; onClose: 
           >
             <span className="pop-ic">{m.icon}</span>
             <span className="pop-l">{m.label}</span>
+            {m.hint}
             {m.checked && <CheckIcon className="pop-ck" />}
             {m.submenu && <ChevronRightIcon className="pop-ck" style={{ color: "var(--text3)" }} />}
           </button>

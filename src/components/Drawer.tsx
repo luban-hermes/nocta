@@ -7,8 +7,10 @@ import { Button } from "./ui/button";
 import { Field, Input, Select, Textarea, type SelectOption } from "./ui/input";
 import { useDialog } from "./ui/dialog";
 import { useToast } from "./ui/toast";
-import { Cover, Gauge, STATUS_LABEL, StatusDot, Ticks, Tile } from "./Cards";
-import { CatIcon, CloseIcon, CopyIcon, RefreshIcon, UploadIcon, WarnIcon } from "./Icons";
+import { Cover, Gauge, LinkDot, LinkLatency, STATUS_LABEL, StatusDot, Ticks, Tile } from "./Cards";
+import { SortItem, SortList } from "./ui/sortable";
+import { openSite, probeAll, siteLinks } from "@/lib/linkprobe";
+import { CatIcon, CloseIcon, CopyIcon, GripIcon, PlusIcon, RefreshIcon, UploadIcon, WarnIcon } from "./Icons";
 
 export type DrawerTarget = { type: "site" | "content" | "monitor"; id: string; edit?: boolean } | null;
 
@@ -44,7 +46,7 @@ export function Drawer({ target, data, onClose, refresh }: { target: DrawerTarge
             <button className="d-close" onClick={onClose} aria-label="关闭">
               <CloseIcon />
             </button>
-            {site && <SiteView key={site.id} s={site} cats={data.categories.filter((c) => c.kind === "site")} admin={data.admin} onClose={onClose} refresh={refresh} />}
+            {site && <SiteView key={site.id} s={site} failover={data.siteFailover} cats={data.categories.filter((c) => c.kind === "site")} admin={data.admin} onClose={onClose} refresh={refresh} />}
             {content && <ContentView key={content.id} startEditing={!!target?.edit} c={content} cats={data.categories.filter((c) => c.kind === "content")} admin={data.admin} onClose={onClose} refresh={refresh} />}
             {monitor && <MonitorView key={monitor.id} m={monitor} admin={data.admin} onClose={onClose} refresh={refresh} />}
           </motion.aside>
@@ -90,9 +92,51 @@ function useAction(refresh: () => Promise<void>) {
 }
 
 /* ---------------- site ---------------- */
-function SiteView({ s, cats, admin, onClose, refresh }: { s: SiteDTO; cats: CategoryDTO[]; admin: boolean; onClose: () => void; refresh: () => Promise<void> }) {
+type LinkRow = { key: string; url: string; note: string };
+let rowSeq = 0;
+const toRows = (s: SiteDTO): LinkRow[] => siteLinks(s).map((l) => ({ key: `r${rowSeq++}`, url: l.url, note: l.note }));
+
+/** ordered link list (item 13): first row = primary; drag a row to the top to make it the primary */
+function LinksEditor({ rows, setRows }: { rows: LinkRow[]; setRows: (r: LinkRow[]) => void }) {
+  const upd = (k: string, patch: Partial<LinkRow>) => setRows(rows.map((r) => (r.key === k ? { ...r, ...patch } : r)));
+  const row = (r: LinkRow, i: number, h: Record<string, unknown> = {}) => (
+    <div className="lk-row">
+      <button type="button" className="grip" aria-label={`拖动排序：链接 ${i + 1}`} {...h}><GripIcon /></button>
+      <LinkDot url={r.url} />
+      <Input value={r.url} onChange={(e) => upd(r.key, { url: e.target.value })} placeholder="https://" spellCheck={false} aria-label={i === 0 ? "主链接" : `备用链接 ${i}`} />
+      <Input className="lk-note" value={r.note} onChange={(e) => upd(r.key, { note: e.target.value })} placeholder={i === 0 ? "主链接" : "备注"} aria-label="备注" />
+      <button type="button" className="icon-btn" aria-label="移除链接" disabled={rows.length < 2} onClick={() => setRows(rows.filter((x) => x.key !== r.key))}><CloseIcon /></button>
+    </div>
+  );
+  return (
+    <div className="f-row" role="group" aria-label="链接">
+      <span>链接</span>
+      <div className="lk-list">
+        <SortList ids={rows.map((r) => r.key)} enabled axis="y" onReorder={(ids) => setRows(ids.map((id) => rows.find((r) => r.key === id)!))} overlay={(id) => { const i = rows.findIndex((r) => r.key === id); return i >= 0 ? row(rows[i], i) : null; }}>
+          {rows.map((r, i) => (
+            <SortItem key={r.key} id={r.key}>
+              {(h) => row(r, i, h)}
+            </SortItem>
+          ))}
+        </SortList>
+        {rows.length < 10 && (
+          <button type="button" className="bk-add" onClick={() => setRows([...rows, { key: `r${rowSeq++}`, url: "", note: "" }])}><PlusIcon size={14} /> 备用链接</button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SiteView({ s, cats, admin, failover, onClose, refresh }: { s: SiteDTO; cats: CategoryDTO[]; admin: boolean; failover: boolean; onClose: () => void; refresh: () => Promise<void> }) {
   const { busy, run, dialog } = useAction(refresh);
-  const [f, setF] = useState({ name: s.name, url: s.url, description: s.description, categoryId: s.categoryId ?? "", pinned: s.pinned });
+  const [f, setF] = useState({ name: s.name, description: s.description, categoryId: s.categoryId ?? "", pinned: s.pinned });
+  const [rows, setRows] = useState<LinkRow[]>(() => toRows(s));
+  const links = siteLinks(s);
+  const linkSig = links.map((l) => l.url + "|" + l.note).join(" ");
+  useEffect(() => setRows(toRows(s)), [linkSig]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (links.length > 1) void probeAll(links.map((l) => l.url));
+  }, [linkSig]); // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <>
       <div className="d-scroll">
@@ -104,9 +148,9 @@ function SiteView({ s, cats, admin, onClose, refresh }: { s: SiteDTO; cats: Cate
           </div>
         </div>
         {admin ? (
-          <form className="f-grid mt-6" onSubmit={(e) => { e.preventDefault(); void run("save", () => api(`/api/sites/${s.id}`, { method: "PATCH", body: f }), "已保存"); }}>
+          <form className="f-grid mt-6" onSubmit={(e) => { e.preventDefault(); void run("save", () => api(`/api/sites/${s.id}`, { method: "PATCH", body: { ...f, links: rows.filter((r) => r.url.trim()).map((r) => ({ url: r.url, note: r.note })) } }), "已保存"); }}>
             <Field label="名称"><Input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></Field>
-            <Field label="网址"><Input value={f.url} onChange={(e) => setF({ ...f, url: e.target.value })} /></Field>
+            <LinksEditor rows={rows} setRows={setRows} />
             <Field label="描述"><Input value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} /></Field>
             <IconEditor kind="site" item={s} refresh={refresh} />
             <div className="f-2">
@@ -120,11 +164,40 @@ function SiteView({ s, cats, admin, onClose, refresh }: { s: SiteDTO; cats: Cate
             <Button type="submit" variant="primary" loading={busy === "save"}>保存修改</Button>
           </form>
         ) : (
-          s.description && <p className="d-ai mt-4"><span>{s.description}</span></p>
+          <>
+            {s.description && <p className="d-ai mt-4"><span>{s.description}</span></p>}
+            {links.length > 1 && (
+              <Section title="链接">
+                <ul className="lk-view">
+                  {links.map((l) => (
+                    <li key={l.url}>
+                      <a href={l.url} target="_blank" rel="noopener noreferrer">
+                        <LinkDot url={l.url} />
+                        <span className="lk-u">{l.note || l.url.replace(/^https?:\/\//, "").replace(/\/$/, "")}</span>
+                        <LinkLatency url={l.url} />
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              </Section>
+            )}
+          </>
         )}
       </div>
       <div className="d-actions" style={{ gridTemplateColumns: admin ? "1fr 1fr" : "1fr" }}>
-        <a className="btn pri" href={s.url} target="_blank" rel="noopener noreferrer">打开网站</a>
+        <a
+          className="btn pri"
+          href={s.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={(e) => {
+            if (!failover || links.length < 2 || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey) return;
+            e.preventDefault();
+            void openSite(links.map((l) => l.url));
+          }}
+        >
+          打开网站
+        </a>
         {admin && (
           <Button variant="danger" loading={busy === "del"} onClick={async () => (await dialog.confirm({ title: `删除站点「${s.name}」？`, message: "删除后无法恢复。", danger: true })) && run("del", () => api(`/api/sites/${s.id}`, { method: "DELETE" }), "已删除").then((ok) => ok && onClose())}>删除</Button>
         )}
@@ -156,7 +229,7 @@ function IconEditor({ kind, item, refresh }: { kind: "site" | "content"; item: S
   const name = "name" in item ? item.name : item.domain;
   return (
     <div className="f-row" role="group" aria-label="图标">
-      <span>图标{item.iconCustom ? "（自定义）" : item.icon ? "（自动抓取）" : "（未找到，显示文字）"}</span>
+      <span>图标</span>
       <div className="icon-ed">
         <Tile src={item.icon} name={name} />
         <div className="icon-ed__r">
@@ -214,7 +287,7 @@ function ContentView({ c, cats, admin, onClose, refresh, startEditing }: { start
             {c.tags.length > 0 && <div className="tags">{c.tags.map((t) => <span className="tag" key={t}>#{t}</span>)}</div>}
             {admin && (
               <Section title="笔记">
-                <textarea className="d-note" value={note} placeholder="写点想法…（失焦自动保存）" onChange={(e) => setNote(e.target.value)} onBlur={() => note !== c.note && api(`/api/contents/${c.id}`, { method: "PATCH", body: { note } }).then(() => { setSaved("已保存"); void refresh(); })} />
+                <textarea className="d-note" value={note} placeholder="写点想法…" onChange={(e) => setNote(e.target.value)} onBlur={() => note !== c.note && api(`/api/contents/${c.id}`, { method: "PATCH", body: { note } }).then(() => { setSaved("已保存"); void refresh(); })} />
                 <p className="d-saved">{saved}</p>
               </Section>
             )}
@@ -315,7 +388,7 @@ function MonitorView({ m, admin, onClose, refresh }: { m: MonitorDTO; admin: boo
                 <div className="f-2">
                   <Field label="检查间隔（秒）"><Input type="number" min={10} value={f.interval} onChange={(e) => setF({ ...f, interval: Number(e.target.value) })} /></Field>
                   <Field label="超时（毫秒）"><Input type="number" min={1000} value={f.timeoutMs} onChange={(e) => setF({ ...f, timeoutMs: Number(e.target.value) })} /></Field>
-                  <Field label="期望状态码（留空 = <400）"><Input type="number" value={f.expectStatus} onChange={(e) => setF({ ...f, expectStatus: e.target.value })} /></Field>
+                  <Field label="期望状态码"><Input type="number" placeholder="200" value={f.expectStatus} onChange={(e) => setF({ ...f, expectStatus: e.target.value })} /></Field>
                   <Field label="方法"><Select ariaLabel="方法" value={f.method} onChange={(v) => setF({ ...f, method: v })} options={[{ value: "GET", label: "GET" }, { value: "HEAD", label: "HEAD" }]} /></Field>
                 </div>
               </>
@@ -357,8 +430,8 @@ function MonitorView({ m, admin, onClose, refresh }: { m: MonitorDTO; admin: boo
               </div>
             </Section>
             {admin && (
-              <Section title="安装探针（在服务器上执行）">
-                <p style={{ fontSize: 13, color: "var(--text3)", margin: "0 4px 8px" }}>先 <code>{sshCmd}</code> 登录服务器，再运行下面这一行。夜航不保存任何密码，探针只用一次性令牌推送数据。</p>
+              <Section title="安装探针">
+                <p style={{ fontSize: 13, color: "var(--text3)", margin: "0 4px 8px" }}>在服务器上运行</p>
                 <pre className="code">{cmd || "加载中…"}</pre>
                 <div className="f-2 mt-2">
                   <Button onClick={() => copyText(cmd).then(() => toast("已复制安装命令"))}><CopyIcon /> 复制安装命令</Button>

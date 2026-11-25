@@ -4,6 +4,7 @@ import { siteDTO } from "@/lib/data";
 import { body, fail, json } from "@/lib/http";
 import { normalizeUrl } from "@/lib/utils";
 import { refreshIcon, removeIconFile } from "@/lib/icons";
+import { setLinks, siteWithLinks, type LinkInput } from "@/lib/sitelinks";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -11,7 +12,7 @@ export async function PATCH(req: Request, { params }: Ctx) {
   const deny = await requireAdmin();
   if (deny) return deny;
   const { id } = await params;
-  const b = await body<{ name?: string; url?: string; description?: string; favicon?: string; categoryId?: string | null; pinned?: boolean }>(req);
+  const b = await body<{ name?: string; url?: string; links?: LinkInput[]; description?: string; favicon?: string; categoryId?: string | null; pinned?: boolean }>(req);
   const data: Record<string, unknown> = {};
   if (b.name != null) data.name = b.name.trim().slice(0, 40) || "未命名";
   if (b.url != null) {
@@ -23,10 +24,19 @@ export async function PATCH(req: Request, { params }: Ctx) {
   if (b.favicon != null) data.favicon = b.favicon.slice(0, 500);
   if (b.categoryId !== undefined) data.categoryId = b.categoryId || null;
   if (b.pinned != null) data.pinned = !!b.pinned;
-  const s = await prisma.site.update({ where: { id }, data }).catch(() => null);
+  // full ordered link list (item 13): links[0] is the primary, the rest are backups
+  if (Array.isArray(b.links)) {
+    try {
+      await setLinks(id, b.links);
+    } catch (e) {
+      return fail(e instanceof Error ? e.message : "链接无效");
+    }
+    delete data.url;
+  }
+  const s = await prisma.site.update({ where: { id }, data, include: { links: { orderBy: { sort: "asc" } } } }).catch(() => null);
   if (!s) return fail("站点不存在", 404);
   // a new URL means a new site: re-fetch its icon unless the admin pinned a custom one
-  if (data.url && !s.iconCustom) return json(siteDTO((await refreshIcon("site", id).catch(() => null)) ?? s));
+  if (data.url && !s.iconCustom && (await refreshIcon("site", id).catch(() => null))) return json(siteDTO((await siteWithLinks(id)) ?? s));
   return json(siteDTO(s));
 }
 

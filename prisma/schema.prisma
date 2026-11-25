@@ -40,12 +40,29 @@ model Site {
   iconCheckedAt DateTime?
   pinned      Boolean   @default(false)
   sort        Int       @default(0)
+  /// optional note for the primary link (backup links keep theirs in SiteLink.note)
+  urlNote     String    @default("")
   categoryId  String?
   category    Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  links       SiteLink[]
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
   @@index([categoryId])
+}
+
+/// backup links of a site (item 13). Site.url stays the primary link; these follow it in `sort` order.
+/// Reachability is checked in the visitor's browser (their network), so no status is stored here.
+model SiteLink {
+  id        String   @id @default(cuid())
+  siteId    String
+  site      Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  url       String
+  note      String   @default("")
+  sort      Int      @default(0)
+  createdAt DateTime @default(now())
+
+  @@index([siteId, sort])
 }
 
 /// type: "article" | "video" | "repo" | "post"

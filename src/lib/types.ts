@@ -13,7 +13,11 @@ export interface CategoryDTO {
 export interface SiteDTO {
   id: string;
   name: string;
+  /** primary link */
   url: string;
+  urlNote: string;
+  /** backup links, in order (item 13) */
+  backups: SiteLinkDTO[];
   description: string;
   favicon: string;
   /** cached icon served by /api/icon/site/:id ("" = none yet → letter tile) */
@@ -23,6 +27,12 @@ export interface SiteDTO {
   sort: number;
   categoryId: string | null;
   createdAt: string;
+}
+
+export interface SiteLinkDTO {
+  id?: string;
+  url: string;
+  note: string;
 }
 
 export interface ContentDTO {
@@ -94,6 +104,8 @@ export interface AppData {
   publicMode: boolean;
   showMonitors: boolean;
   aiEnabled: boolean;
+  /** open the first reachable backup link when the primary one is down */
+  siteFailover: boolean;
   categories: CategoryDTO[];
   sites: SiteDTO[];
   contents: ContentDTO[];

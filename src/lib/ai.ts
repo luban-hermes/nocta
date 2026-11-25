@@ -5,9 +5,11 @@ import { getSettings } from "./settings";
  * Minimal OpenAI-compatible Chat Completions client.
  * Works with OpenAI, DeepSeek, 通义千问 (DashScope compatible-mode), Moonshot, Ollama (/v1) ...
  */
-export async function chat(messages: { role: "system" | "user" | "assistant"; content: string }[], opts: { json?: boolean; timeoutMs?: number; maxTokens?: number } = {}) {
-  const env = await getSettings();
-  if (!env.aiEnabled) throw new Error("AI 未配置（在后台「设置」里填写 Base URL 和模型）");
+export async function chat(messages: { role: "system" | "user" | "assistant"; content: string }[], opts: { json?: boolean; timeoutMs?: number; maxTokens?: number; config?: { aiBaseUrl: string; aiApiKey: string; aiModel: string } } = {}) {
+  const saved = opts.config ? null : await getSettings();
+  if (saved && !saved.aiEnabled) throw new Error("AI 未配置");
+  const env = opts.config ?? saved!;
+  if (!env.aiBaseUrl || !env.aiModel) throw new Error("请填写 Base URL 和模型");
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), opts.timeoutMs ?? 25000);
   const call = async (withFormat: boolean) => {
