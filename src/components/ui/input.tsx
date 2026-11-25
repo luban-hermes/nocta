@@ -9,7 +9,7 @@ export const Textarea = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<H
   return <textarea ref={ref} className={cn("txa", className)} {...p} />;
 });
 
-export { Select, type SelectOption } from "./select";
+export { Select, SelectTrigger, SharedSelect, type SelectOption } from "./select";
 
 /** a labelled form row. A <div> (not <label>) so custom controls such as Select are not re-clicked by label activation */
 export function Field({ label, children, className }: { label: string; children: ReactNode; className?: string }) {

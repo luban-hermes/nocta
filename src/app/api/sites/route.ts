@@ -15,7 +15,7 @@ export async function POST(req: Request) {
   if (!u) return fail("请输入有效的网址");
   if (b.name && b.favicon != null) {
     const max = await prisma.site.aggregate({ _max: { sort: true } });
-    const s = await prisma.site.create({ data: { name: b.name.slice(0, 40), url: u.toString(), favicon: b.favicon, description: b.description ?? "", categoryId: b.categoryId || null, sort: (max._max.sort ?? -1) + 1 } });
+    const s = await prisma.site.create({ data: { name: b.name.slice(0, 40), url: u.toString(), favicon: b.favicon, description: b.description ?? "", categoryId: b.categoryId || null, sort: (max._max.sort ?? 0) + 1024 } });
     const withIcon = await refreshIcon("site", s.id).catch(() => null);
     return json(siteDTO(withIcon ?? s), 201);
   }

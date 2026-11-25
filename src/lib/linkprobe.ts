@@ -112,3 +112,50 @@ export function useProbes() {
     () => 0,
   );
 }
+
+/*
+ * v0.4.0: only the multi-link cards that are on screen get probed (a long list used to probe every
+ * multi-link site on load and again every 5 minutes). Cards register their links while mounted; probes
+ * run when the browser is idle, and the registered links are re-checked every 5 minutes.
+ */
+const watched = new Map<string, number>();
+const queued = new Set<string>();
+let flushing = 0;
+let timer: number | undefined;
+
+function flushSoon() {
+  if (flushing || typeof window === "undefined") return;
+  const ric = (window as unknown as { requestIdleCallback?: (f: () => void, o?: { timeout: number }) => number }).requestIdleCallback;
+  const run = () => {
+    const urls = [...queued].filter((u) => watched.has(u));
+    queued.clear();
+    void probeAll(urls).finally(() => {
+      flushing = 0;
+      if (queued.size) flushSoon();
+    });
+  };
+  // wait until the cards have stayed on screen for a moment (fast scrolling past them probes nothing), then idle
+  flushing = window.setTimeout(() => (ric ? ric(run, { timeout: 4000 }) : run()), 1000);
+  if (timer === undefined)
+    timer = window.setInterval(() => {
+      if (document.hidden || !watched.size) return;
+      for (const u of watched.keys()) if (!linkState(u)) queued.add(u);
+      if (queued.size) flushSoon();
+    }, 5 * 60_000 + 1000);
+}
+
+/** a card with backup links is on screen: keep its links checked; returns the cleanup */
+export function watchLinks(urls: string[]) {
+  for (const u of urls) {
+    watched.set(u, (watched.get(u) ?? 0) + 1);
+    if (!linkState(u)) queued.add(u);
+  }
+  if (queued.size) flushSoon();
+  return () => {
+    for (const u of urls) {
+      const n = (watched.get(u) ?? 1) - 1;
+      if (n <= 0) watched.delete(u);
+      else watched.set(u, n);
+    }
+  };
+}

@@ -18,6 +18,18 @@ export async function api<T = unknown>(path: string, init: { method?: string; bo
   return data as T;
 }
 
+/** GET a large JSON list compressed (see jsonz on the server); falls back to plain JSON */
+export async function apiZ<T = unknown>(path: string): Promise<T> {
+  const can = typeof DecompressionStream !== "undefined";
+  const res = await fetch(can ? path + (path.includes("?") ? "&" : "?") + "z=1" : path, { cache: "no-store" });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new ApiError((data as { error?: string }).error ?? `请求失败（${res.status}）`, res.status);
+  }
+  if (can && res.headers.get("x-nocta-z") === "gzip" && res.body) return (await new Response(res.body.pipeThrough(new DecompressionStream("gzip"))).json()) as T;
+  return (await res.json()) as T;
+}
+
 export const fmtBytes = (n: number | null | undefined, digits = 1) => {
   if (n == null) return "—";
   const u = ["B", "KB", "MB", "GB", "TB"];

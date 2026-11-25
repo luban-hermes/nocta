@@ -1,9 +1,7 @@
 import "server-only";
-import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
-import path from "node:path";
 import { prisma } from "./db";
-import { iconsDir, refreshIcon } from "./icons";
+import { refreshIcon } from "./icons";
+import { iconContentHash } from "./iconver";
 import { normalizeUrl } from "./utils";
 
 /*
@@ -76,12 +74,7 @@ const hostOf = (u: string) => {
 const norm = (s: string) => s.trim().toLowerCase().replace(/\s+/g, "");
 
 async function iconHash(file: string) {
-  if (!file) return "";
-  try {
-    return createHash("sha1").update(await readFile(path.join(iconsDir(), file))).digest("hex");
-  } catch {
-    return "";
-  }
+  return iconContentHash(file);
 }
 
 /**

@@ -1,13 +1,13 @@
 "use client";
 import { motion } from "framer-motion";
-import { useEffect, useRef, useState, type PointerEvent } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent, type ReactNode } from "react";
 import type { ContentDTO, MonitorDTO, SiteDTO, Tick } from "@/lib/types";
 import { ago, fmtRate } from "@/lib/client";
 import { cn } from "@/lib/utils";
 import { ArrowDownIcon, ArrowUpIcon, PinIcon, PlayIcon, SparkIcon, WarnIcon } from "./Icons";
 import { useLongPress } from "./ui/context-menu";
 import { mergeHandlers, type HandleProps } from "./ui/sortable";
-import { linkState, openSite, siteLinks, useProbes } from "@/lib/linkprobe";
+import { linkState, openSite, siteLinks, useProbes, watchLinks } from "@/lib/linkprobe";
 
 /* ---------- icon tile: cached server-side icon; the letter tile is only the very last resort ---------- */
 /** an <img> that reports failures even when they happened before hydration */
@@ -27,14 +27,30 @@ export function Tile({ src, name, size }: { src?: string; name: string; size?: "
   const letter = (name.trim()[0] ?? "?").toUpperCase();
   return (
     <span className={cn("tile", size, src && !broken && "has-img")}>
-      {src && !broken ? <img ref={ref} src={src} alt="" decoding="async" draggable={false} onError={onError} /> : <span className="tl">{letter}</span>}
+      {src && !broken ? <img ref={ref} src={src} alt="" loading="lazy" decoding="async" draggable={false} onError={onError} /> : <span className="tl">{letter}</span>}
     </span>
   );
 }
 
 const enter = (i: number, still?: boolean) => still ? { initial: false as const } : ({ initial: { opacity: 0, y: 16 }, animate: { opacity: 1, y: 0 }, transition: { duration: 0.4, delay: Math.min(i, 20) * 0.03, ease: [0.22, 1, 0.36, 1] as const } });
 
-type CardEvents = { handle?: HandleProps; onMenu?: (x: number, y: number) => void; /** static copy drawn in the drag overlay */ overlay?: boolean };
+/**
+ * card wrapper with the entrance animation in CSS (v0.4.0): server-rendered cards are visible before any
+ * JavaScript runs; only the first cards of a freshly shown list fade in, and never the ones that mount while
+ * scrolling a long list.
+ */
+function Enter({ i, on, children }: { i: number; on: boolean; children: ReactNode }) {
+  return on ? <div className="card-in" style={{ "--i": Math.min(i, 20) } as CSSProperties}>{children}</div> : <div>{children}</div>;
+}
+
+type CardEvents = {
+  handle?: HandleProps;
+  onMenu?: (x: number, y: number) => void;
+  /** static copy drawn in the drag overlay */
+  overlay?: boolean;
+  /** play the entrance animation (default: yes, except in the overlay) */
+  anim?: boolean;
+};
 
 /* ---------- reachability of one link, as seen from this browser (item 13) ---------- */
 export function LinkDot({ url }: { url: string }) {
@@ -49,9 +65,14 @@ export function LinkLatency({ url }: { url: string }) {
 }
 
 /* ---------- site card: icon + name, click opens URL; right-click / long-press opens the menu ---------- */
-export function SiteCard({ site, index, handle, onMenu, overlay, failover }: { site: SiteDTO; index: number; failover?: boolean } & CardEvents) {
+export const SiteCard = memo(function SiteCard({ site, index, handle, onMenu, menu, overlay, failover, anim }: { site: SiteDTO; index: number; failover?: boolean; /** stable alternative to onMenu (lets lists memoise cards) */ menu?: (s: SiteDTO, x: number, y: number) => void } & CardEvents) {
   const [hot, setHot] = useState(false);
+  const onMenuXY = useMemo(() => onMenu ?? (menu ? (x: number, y: number) => menu(site, x, y) : undefined), [onMenu, menu, site]);
+  onMenu = onMenuXY;
   const lp = useLongPress(onMenu ?? null);
+  // multi-link sites: check reachability of the links of the cards that are actually shown (v0.4.0)
+  const linkKey = site.backups.length && !overlay ? siteLinks(site).map((l) => l.url).join("\n") : "";
+  useEffect(() => (linkKey ? watchLinks(linkKey.split("\n")) : undefined), [linkKey]);
   const move = (e: PointerEvent<HTMLAnchorElement>) => {
     if (e.pointerType !== "mouse" || document.body.classList.contains("is-sorting")) return;
     const el = e.currentTarget, r = el.getBoundingClientRect();
@@ -62,7 +83,7 @@ export function SiteCard({ site, index, handle, onMenu, overlay, failover }: { s
     el.style.setProperty("--ry", `${(x - 0.5) * 12}deg`);
   };
   return (
-    <motion.div {...enter(index, overlay)}>
+    <Enter i={index} on={anim ?? !overlay}>
       <a
         {...mergeHandlers(handle, lp)}
         className={cn("site", hot && !overlay && "is-hot")}
@@ -102,9 +123,9 @@ export function SiteCard({ site, index, handle, onMenu, overlay, failover }: { s
         <Tile src={site.icon} name={site.name} />
         <span className="nm">{site.name}</span>
       </a>
-    </motion.div>
+    </Enter>
   );
-}
+});
 
 /* ---------- content card: cover, title, AI summary, domain, tags ---------- */
 const TYPE_LABEL: Record<ContentDTO["type"], string> = { article: "文章", video: "视频", repo: "仓库", post: "帖子" };
@@ -125,14 +146,17 @@ export function Cover({ c, className }: { c: ContentDTO; className?: string }) {
   );
 }
 
-export function ContentCard({ c, index, onOpen, handle, onMenu, overlay }: { c: ContentDTO; index: number; onOpen: () => void } & CardEvents) {
+export const ContentCard = memo(function ContentCard({ c, index, onOpen, open, handle, onMenu, menu, overlay, anim }: { c: ContentDTO; index: number; onOpen?: () => void; /** stable alternatives (let lists memoise cards) */ open?: (c: ContentDTO) => void; menu?: (c: ContentDTO, x: number, y: number) => void } & CardEvents) {
+  const onMenuXY = useMemo(() => onMenu ?? (menu ? (x: number, y: number) => menu(c, x, y) : undefined), [onMenu, menu, c]);
+  onMenu = onMenuXY;
+  const doOpen = () => (onOpen ? onOpen() : open?.(c));
   const lp = useLongPress(onMenu ?? null);
   return (
-    <motion.div {...enter(index, overlay)}>
+    <Enter i={index} on={anim ?? !overlay}>
     <article
       {...mergeHandlers(handle, lp)}
       className="item"
-      onClick={onOpen}
+      onClick={doOpen}
       tabIndex={0}
       role="button"
       aria-label={c.title}
@@ -143,7 +167,7 @@ export function ContentCard({ c, index, onOpen, handle, onMenu, overlay }: { c: 
       }}
       onKeyDown={(e) => {
         handle?.onKeyDown?.(e);
-        if (e.key === "Enter") onOpen();
+        if (e.key === "Enter") doOpen();
         if (onMenu && (e.key === "ContextMenu" || (e.shiftKey && e.key === "F10"))) {
           e.preventDefault();
           const r = e.currentTarget.getBoundingClientRect();
@@ -188,9 +212,9 @@ export function ContentCard({ c, index, onOpen, handle, onMenu, overlay }: { c: 
         </div>
       </div>
     </article>
-    </motion.div>
+    </Enter>
   );
-}
+});
 
 /* ---------- monitor visuals ---------- */
 export function Gauge({ label, value }: { label: string; value: number | null }) {

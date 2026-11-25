@@ -7,6 +7,7 @@ import { prisma } from "./db";
 import { fetchMeta, type IconCandidate, type PageMeta } from "./metadata";
 import { dataSubdir } from "./paths";
 import { safeFetch } from "./ssrf";
+import { iconChanged } from "./iconver";
 
 /*
  * Server-side favicon cache. Icons are fetched once (SSRF-guarded), validated by their magic bytes and
@@ -126,6 +127,7 @@ async function writeIcon(name: string, buf: Buffer) {
   const tmp = path.join(dir, `.${name}.${randomBytes(4).toString("hex")}`);
   await writeFile(tmp, buf);
   await rename(tmp, path.join(dir, name));
+  iconChanged(name);
   return name;
 }
 
@@ -155,6 +157,7 @@ export async function fetchCustomIcon(id: string, url: string) {
 export async function removeIconFile(name: string) {
   if (!name.startsWith("u_")) return; // host files are shared
   await unlink(path.join(iconsDir(), path.basename(name))).catch(() => {});
+  iconChanged(name);
 }
 
 export async function readIcon(name: string) {

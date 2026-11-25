@@ -1,9 +1,9 @@
 "use client";
 import { motion } from "framer-motion";
 import Link from "next/link";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import type { AppData, CategoryDTO, ContentDTO, SiteDTO } from "@/lib/types";
-import { api, copyText } from "@/lib/client";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { AppData, CategoryDTO, ContentDTO, MonitorDTO, SiteDTO, Versions } from "@/lib/types";
+import { api, apiZ, copyText } from "@/lib/client";
 import { cn } from "@/lib/utils";
 import { Starfield } from "./Starfield";
 import { ThemeToggle } from "./ThemeToggle";
@@ -18,6 +18,7 @@ import { AddDialog } from "./AddDialog";
 import { Assistant } from "./Assistant";
 import { ArrowUpIcon, CatIcon, CopyIcon, EditIcon, ExternalIcon, LinkIcon, MoveIcon, OpenIcon, PinIcon, PinOffIcon, PlusIcon, RefreshIcon, SearchIcon, TrashIcon } from "./Icons";
 import { probeAll, siteLinks } from "@/lib/linkprobe";
+import { VirtualGrid, VirtualMasonry, useEntrance } from "./ui/virtual";
 
 type Tab = "sites" | "contents" | "monitors";
 type RailItem = { id: string; name: string; icon: string; n: number; sortable?: boolean };
@@ -40,50 +41,82 @@ export function NoctaApp({ initial }: { initial: AppData }) {
 
 const shortUrl = (u: string) => u.replace(/^https?:\/\//, "").replace(/\/$/, "");
 
-/** keep the relative order of the items outside `subset` and put the subset's new order into its old slots */
-function mergeOrder(all: string[], subsetNew: string[]) {
-  const set = new Set(subsetNew);
-  let k = 0;
-  return all.map((id) => (set.has(id) ? subsetNew[k++] : id));
-}
-function applyOrder<T extends { id: string; sort: number; pinned?: boolean }>(list: T[], ids: string[]) {
-  const at = new Map(ids.map((id, i) => [id, i]));
-  return list
-    .map((x) => ({ ...x, sort: at.get(x.id) ?? x.sort }))
-    .sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned) || a.sort - b.sort);
-}
-
-/** masonry in reading order: items go round-robin into as many columns as fit (no empty columns on wide screens) */
-function Masonry({ count, min = 290, gap = 16, children }: { count: number; min?: number; gap?: number; children: (i: number) => ReactNode }) {
-  const ref = useRef<HTMLDivElement>(null);
-  const [cols, setCols] = useState(3);
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const fit = () => setCols(Math.max(1, Math.floor((el.clientWidth + gap) / (min + gap))));
-    fit();
-    const ro = new ResizeObserver(fit);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [min, gap]);
-  return (
-    <div ref={ref} className="masonry" style={{ gap }}>
-      {Array.from({ length: cols }, (_, c) => (
-        <div key={c} className="mcol" style={{ gap }}>
-          {Array.from({ length: Math.ceil((count - c) / cols) }, (_, r) => children(r * cols + c))}
-        </div>
-      ))}
-    </div>
-  );
+/** list order of the server: pinned first, then `sort`, then age (sites oldest first, contents newest first) */
+const cmpSite = (a: SiteDTO, b: SiteDTO) => Number(b.pinned) - Number(a.pinned) || a.sort - b.sort || a.createdAt.localeCompare(b.createdAt);
+const cmpContent = (a: ContentDTO, b: ContentDTO) => Number(b.pinned) - Number(a.pinned) || a.sort - b.sort || b.createdAt.localeCompare(a.createdAt);
+function upsert<T extends { id: string }>(list: T[], item: T, cmp: (a: T, b: T) => number) {
+  const out = list.filter((x) => x.id !== item.id);
+  out.push(item);
+  return out.sort(cmp);
 }
 
 /**
- * site grid: plain auto-fill grid, cards keep their normal size and always fill from the left edge
- * (a short row stays at the left, never centred or stretched — v0.3.1).
+ * optimistic single move (v0.4.0): put `id` right after `prev` (or right before `next`) in the full list —
+ * the same rule /api/reorder applies on the server. Neighbours on the other side of the pinned boundary are ignored.
  */
-function SiteGrid({ children }: { count?: number; children: ReactNode }) {
-  return <div className="sites">{children}</div>;
+function moveAfter<T extends { id: string; sort: number; pinned: boolean }>(list: T[], id: string, prev: string | null, next: string | null) {
+  const me = list.find((x) => x.id === id);
+  if (!me) return list;
+  const others = list.filter((x) => x.id !== id);
+  const ok = (n: string | null) => (n ? others.find((x) => x.id === n && x.pinned === me.pinned) : undefined);
+  const a = ok(prev), z = a ? undefined : ok(next);
+  if (!a && !z) return list;
+  const pos = a ? others.indexOf(a) + 1 : others.indexOf(z!);
+  const lo = others[pos - 1]?.pinned === me.pinned ? others[pos - 1].sort : undefined;
+  const hi = others[pos]?.pinned === me.pinned ? others[pos].sort : undefined;
+  const sort = lo != null && hi != null ? (lo + hi) / 2 : lo != null ? lo + 1024 : hi != null ? hi - 1024 : me.sort;
+  others.splice(pos, 0, { ...me, sort });
+  return others;
 }
+
+type MenuFor<T> = (item: T, x: number, y: number) => void;
+
+/** the site grid of one category; remounted per category so its first cards play the entrance */
+function SitesBlock({ sites, total, sortable, onReorder, menu, failover }: { sites: SiteDTO[]; total: number; sortable: boolean; onReorder: (ids: string[], moved: { id: string }) => void; menu: MenuFor<SiteDTO>; failover: boolean }) {
+  const ent = useEntrance();
+  const ids = useMemo(() => sites.map((s) => s.id), [sites]);
+  const overlay = useCallback((id: string) => {
+    const s = sites.find((x) => x.id === id);
+    return s ? <SiteCard site={s} index={0} overlay /> : null;
+  }, [sites]);
+  const render = useCallback(
+    (s: SiteDTO, i: number) => (
+      <SortItem key={s.id} id={s.id}>
+        {(h) => <SiteCard site={s} index={i} anim={ent(i)} handle={h} menu={menu} failover={failover} />}
+      </SortItem>
+    ),
+    [ent, menu, failover],
+  );
+  return (
+    <SortList virtual ids={ids} enabled={sortable} onReorder={onReorder} overlay={overlay}>
+      <VirtualGrid items={sites} total={total} render={render} />
+    </SortList>
+  );
+}
+
+function ContentsBlock({ contents, sortable, onReorder, menu, open, jump }: { contents: ContentDTO[]; sortable: boolean; onReorder: (ids: string[], moved: { id: string }) => void; menu: MenuFor<ContentDTO>; open: (c: ContentDTO) => void; jump: { id: string; n: number } | null }) {
+  const ent = useEntrance();
+  const ids = useMemo(() => contents.map((c) => c.id), [contents]);
+  const overlay = useCallback((id: string) => {
+    const c = contents.find((x) => x.id === id);
+    return c ? <ContentCard c={c} index={0} overlay /> : null;
+  }, [contents]);
+  const render = useCallback(
+    (c: ContentDTO, i: number) => (
+      <SortItem key={c.id} id={c.id}>
+        {(h) => <ContentCard c={c} index={i} anim={ent(i)} handle={h} menu={menu} open={open} />}
+      </SortItem>
+    ),
+    [ent, menu, open],
+  );
+  return (
+    <SortList virtual ids={ids} enabled={sortable} onReorder={onReorder} overlay={overlay}>
+      <VirtualMasonry items={contents} jump={jump} render={render} />
+    </SortList>
+  );
+}
+
+type ListKind = "site" | "content" | "category";
 
 function App({ initial }: { initial: AppData }) {
   const toast = useToast();
@@ -98,28 +131,100 @@ function App({ initial }: { initial: AppData }) {
   const [showTop, setShowTop] = useState(false);
   const [isMac, setIsMac] = useState(true);
   const [menu, setMenu] = useState<MenuState>(null);
+  const [jump, setJump] = useState<{ id: string; n: number } | null>(null);
   const closeMenu = useCallback(() => setMenu(null), []);
   const admin = data.admin;
+  const dataRef = useRef(data);
+  dataRef.current = data;
 
+  /* ---------- data: first view from the server, full lists after hydration, then only what changed (v0.4.0) ---------- */
+  const ver = useRef<Versions | undefined>(initial.version);
+  const loading = useRef<Partial<Record<ListKind, Promise<void>>>>({});
+  const loadList = useCallback((kind: ListKind) => {
+    const running = loading.current[kind];
+    if (running) return running;
+    const job = apiZ<{ items: unknown[]; version: Versions }>(`/api/items?kind=${kind}`)
+      .then((r) => {
+        setData((d) => {
+          const partial = { sites: d.partial?.sites ?? false, contents: d.partial?.contents ?? false };
+          if (kind === "site") return { ...d, sites: r.items as SiteDTO[], partial: { ...partial, sites: false } };
+          if (kind === "content") return { ...d, contents: r.items as ContentDTO[], partial: { ...partial, contents: false } };
+          return { ...d, categories: r.items as CategoryDTO[] };
+        });
+        const key = kind === "site" ? "s" : kind === "content" ? "c" : "k";
+        ver.current = { ...(ver.current ?? r.version), [key]: r.version[key] };
+      })
+      .catch(() => {
+        /* keep what we have; the next sync retries */
+      })
+      .finally(() => {
+        delete loading.current[kind];
+      });
+    loading.current[kind] = job;
+    return job;
+  }, []);
+  const loadAll = useCallback(() => {
+    const p = dataRef.current.partial;
+    return Promise.all([p?.sites ? loadList("site") : null, p?.contents ? loadList("content") : null]);
+  }, [loadList]);
+
+  /** the small poll: change markers (+ monitor cards); re-download a list only when it changed */
+  const sync = useCallback(
+    async (withMonitors: boolean) => {
+      const r = await api<{ version: Versions; monitors?: MonitorDTO[] }>(`/api/sync${withMonitors ? "?m=1" : ""}`);
+      if (r.monitors) setData((d) => ({ ...d, monitors: r.monitors! }));
+      const v = ver.current, p = dataRef.current.partial;
+      const jobs: Promise<void>[] = [];
+      if (!v || r.version.k !== v.k) jobs.push(loadList("category"), loadList("site"), loadList("content")); // deleting a category un-files its items
+      else {
+        if (p?.sites || r.version.s !== v.s) jobs.push(loadList("site"));
+        if (p?.contents || r.version.c !== v.c) jobs.push(loadList("content"));
+      }
+      await Promise.all(jobs);
+      ver.current = r.version;
+    },
+    [loadList],
+  );
   const refresh = useCallback(async () => {
     try {
-      setData(await api<AppData>("/api/data"));
+      await sync(dataRef.current.showMonitors);
     } catch {
       /* keep the last good data */
     }
+  }, [sync]);
+  /** after a change applied locally from the server's answer: remember the new markers, download nothing */
+  const adopt = useCallback(() => {
+    void api<{ version: Versions }>("/api/sync").then((r) => (ver.current = r.version)).catch(() => {});
   }, []);
 
-  // polling: monitors every 15s while that tab is visible, everything else every 60s
+  useEffect(() => {
+    if (initial.partial?.sites) void loadList("site");
+    if (initial.partial?.contents) {
+      const ric = (window as unknown as { requestIdleCallback?: (f: () => void, o?: { timeout: number }) => number }).requestIdleCallback;
+      const go = () => void loadList("content");
+      if (ric) ric(go, { timeout: 1500 });
+      else setTimeout(go, 300);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // polling: monitor cards + change markers, every 15s on the monitors tab, every 60s otherwise
   useEffect(() => {
     const ms = tab === "monitors" ? 15000 : 60000;
-    const t = setInterval(() => !document.hidden && !document.body.classList.contains("is-sorting") && refresh(), ms);
-    const onVis = () => !document.hidden && refresh();
+    const tick = () => !document.hidden && !document.body.classList.contains("is-sorting") && void refresh();
+    const t = setInterval(tick, ms);
+    const onVis = () => !document.hidden && tick();
     document.addEventListener("visibilitychange", onVis);
+    if (tab === "monitors") tick();
     return () => {
       clearInterval(t);
       document.removeEventListener("visibilitychange", onVis);
     };
   }, [tab, refresh]);
+
+  useEffect(() => {
+    if (palette) void loadAll();
+  }, [palette, loadAll]);
 
   useEffect(() => {
     setIsMac(/Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent));
@@ -129,7 +234,11 @@ function App({ initial }: { initial: AppData }) {
         setPalette((v) => !v);
       }
     };
-    const onScroll = () => setShowTop(scrollY > 400);
+    let top = false;
+    const onScroll = () => {
+      const v = scrollY > 400;
+      if (v !== top) setShowTop((top = v));
+    };
     addEventListener("keydown", onKey);
     addEventListener("scroll", onScroll, { passive: true });
     onScroll();
@@ -139,21 +248,6 @@ function App({ initial }: { initial: AppData }) {
     };
   }, []);
 
-  // multi-link sites (item 13): when the browser is idle, check which links answer from this network
-  const linkKey = data.sites.filter((s) => s.backups.length).map((s) => siteLinks(s).map((l) => l.url).join(" ")).join("\n");
-  useEffect(() => {
-    if (!linkKey) return;
-    const urls = linkKey.split(/\s+/).filter(Boolean);
-    const ric = (window as unknown as { requestIdleCallback?: (f: () => void, o?: { timeout: number }) => number }).requestIdleCallback;
-    const id = ric ? ric(() => void probeAll(urls), { timeout: 4000 }) : window.setTimeout(() => void probeAll(urls), 1500);
-    const again = window.setInterval(() => !document.hidden && void probeAll(urls), 5 * 60_000 + 1000);
-    return () => {
-      (window as unknown as { cancelIdleCallback?: (n: number) => void }).cancelIdleCallback?.(id);
-      clearTimeout(id);
-      clearInterval(again);
-    };
-  }, [linkKey]);
-
   useEffect(() => {
     document.body.classList.toggle("x-chat-open", chat);
     document.body.classList.toggle("x-drawer-open", !!drawer);
@@ -162,19 +256,37 @@ function App({ initial }: { initial: AppData }) {
   const openItem = useCallback((type: "content" | "monitor", id: string) => {
     setTab(type === "content" ? "contents" : "monitors");
     setDrawer({ type, id });
+    if (type === "content") {
+      // ⌘K / assistant: bring the card into view behind the drawer
+      const c = dataRef.current.contents.find((x) => x.id === id);
+      setCat((cc) => (cc.contents === "all" || cc.contents === (c?.categoryId ?? "none") ? cc : { ...cc, contents: "all" }));
+      setJump((j) => ({ id, n: (j?.n ?? 0) + 1 }));
+    }
   }, []);
 
-  const siteCats = data.categories.filter((c) => c.kind === "site");
-  const contentCats = data.categories.filter((c) => c.kind === "content");
+  const siteCats = useMemo(() => data.categories.filter((c) => c.kind === "site"), [data.categories]);
+  const contentCats = useMemo(() => data.categories.filter((c) => c.kind === "content"), [data.categories]);
+  const sitesLoaded = !data.partial?.sites, contentsLoaded = !data.partial?.contents;
+  const totals = data.totals;
+  const nSites = sitesLoaded ? data.sites.length : totals?.sites ?? data.sites.length;
+  const nContents = contentsLoaded ? data.contents.length : totals?.contents ?? data.contents.length;
 
   const rail: RailItem[] = useMemo(() => {
-    const mk = (cats: CategoryDTO[], total: number, uncategorized: number): RailItem[] => [
-      { id: "all", name: "全部", icon: "layers", n: total },
-      ...cats.map((c) => ({ id: c.id, name: c.name, icon: c.icon, n: c.count, sortable: true })),
-      ...(uncategorized ? [{ id: "none", name: "未分类", icon: "inbox", n: uncategorized }] : []),
-    ];
-    if (tab === "sites") return mk(siteCats, data.sites.length, data.sites.filter((s) => !s.categoryId).length);
-    if (tab === "contents") return mk(contentCats, data.contents.length, data.contents.filter((s) => !s.categoryId).length);
+    const counts = (list: { categoryId: string | null }[]) => {
+      const m = new Map<string | null, number>();
+      for (const x of list) m.set(x.categoryId, (m.get(x.categoryId) ?? 0) + 1);
+      return m;
+    };
+    const mk = (cats: CategoryDTO[], total: number, by: Map<string | null, number> | null, none: number): RailItem[] => {
+      const un = by ? by.get(null) ?? 0 : none;
+      return [
+        { id: "all", name: "全部", icon: "layers", n: total },
+        ...cats.map((c) => ({ id: c.id, name: c.name, icon: c.icon, n: by ? by.get(c.id) ?? 0 : c.count, sortable: true })),
+        ...(un ? [{ id: "none", name: "未分类", icon: "inbox", n: un }] : []),
+      ];
+    };
+    if (tab === "sites") return mk(siteCats, nSites, sitesLoaded ? counts(data.sites) : null, totals?.sitesNone ?? 0);
+    if (tab === "contents") return mk(contentCats, nContents, contentsLoaded ? counts(data.contents) : null, totals?.contentsNone ?? 0);
     const ms = data.monitors;
     return [
       { id: "all", name: "全部", icon: "layers", n: ms.length },
@@ -182,17 +294,18 @@ function App({ initial }: { initial: AppData }) {
       { id: "http", name: "API · 服务", icon: "globe", n: ms.filter((m) => m.kind === "http").length },
       { id: "bad", name: "异常", icon: "triangle-alert", n: ms.filter((m) => m.status === "down" || m.status === "warn").length },
     ];
-  }, [tab, data, siteCats, contentCats]);
+  }, [tab, data.sites, data.contents, data.monitors, siteCats, contentCats, sitesLoaded, contentsLoaded, nSites, nContents, totals]);
 
   const current = cat[tab];
-  const byCat = <T extends { categoryId: string | null }>(list: T[]) => (current === "all" ? list : current === "none" ? list.filter((x) => !x.categoryId) : list.filter((x) => x.categoryId === current));
-  const sites = byCat(data.sites);
-  const contents = byCat(data.contents);
+  const sites = useMemo(() => (cat.sites === "all" ? data.sites : cat.sites === "none" ? data.sites.filter((x) => !x.categoryId) : data.sites.filter((x) => x.categoryId === cat.sites)), [data.sites, cat.sites]);
+  const contents = useMemo(() => (cat.contents === "all" ? data.contents : cat.contents === "none" ? data.contents.filter((x) => !x.categoryId) : data.contents.filter((x) => x.categoryId === cat.contents)), [data.contents, cat.contents]);
   const monitors = current === "all" ? data.monitors : current === "bad" ? data.monitors.filter((m) => m.status === "down" || m.status === "warn") : data.monitors.filter((m) => m.kind === current);
+  // while only the first sites are here, keep the page as tall as the whole category will be
+  const sitesTotal = sitesLoaded ? sites.length : tab === "sites" ? rail.find((r) => r.id === current)?.n ?? sites.length : sites.length;
 
   const tabs: { id: Tab; label: string; n: number }[] = [
-    { id: "sites", label: "站点导航", n: data.sites.length },
-    { id: "contents", label: "收藏内容", n: data.contents.length },
+    { id: "sites", label: "站点导航", n: nSites },
+    { id: "contents", label: "收藏内容", n: nContents },
     ...(data.showMonitors ? [{ id: "monitors" as Tab, label: "服务监控", n: data.monitors.length }] : []),
   ];
   const sum = {
@@ -203,6 +316,7 @@ function App({ initial }: { initial: AppData }) {
 
   const switchTab = (t: Tab) => {
     setTab(t);
+    if (t === "contents") void loadAll();
     const el = document.getElementById("tabs");
     if (el && el.getBoundingClientRect().top < 0) el.scrollIntoView({ behavior: "smooth" });
   };
@@ -212,68 +326,105 @@ function App({ initial }: { initial: AppData }) {
     if (el && el.getBoundingClientRect().top < 0) el.scrollIntoView({ behavior: "smooth" });
   };
 
-  /* ---------- drag to reorder (admin): optimistic, then persisted ---------- */
-  const persist = async (kind: "site" | "content" | "category", ids: string[]) => {
-    try {
-      await api("/api/reorder", { body: { kind, ids } });
-    } catch (e) {
-      toast(e instanceof Error ? e.message : "排序保存失败", "error");
-      await refresh();
-    }
-  };
-  const reorderSites = (subset: string[]) => {
-    const ids = mergeOrder(data.sites.map((x) => x.id), subset);
-    setData((d) => ({ ...d, sites: applyOrder(d.sites, ids) }));
-    void persist("site", ids);
-  };
-  const reorderContents = (subset: string[]) => {
-    const ids = mergeOrder(data.contents.map((x) => x.id), subset);
-    setData((d) => ({ ...d, contents: applyOrder(d.contents, ids) }));
-    void persist("content", ids);
-  };
+  /* ---------- drag to reorder (admin): optimistic; only the moved row is saved (v0.4.0) ---------- */
+  const persistMove = useCallback(
+    async (kind: "site" | "content", id: string, after: string | null, before: string | null) => {
+      try {
+        const r = await api<{ sort: number; sorts?: [string, number][] }>("/api/reorder", { body: { kind, id, after, before } });
+        setData((d) => {
+          if (r.sorts) {
+            const at = new Map(r.sorts);
+            return kind === "site"
+              ? { ...d, sites: d.sites.map((x) => ({ ...x, sort: at.get(x.id) ?? x.sort })).sort(cmpSite) }
+              : { ...d, contents: d.contents.map((x) => ({ ...x, sort: at.get(x.id) ?? x.sort })).sort(cmpContent) };
+          }
+          return kind === "site" ? { ...d, sites: d.sites.map((x) => (x.id === id ? { ...x, sort: r.sort } : x)) } : { ...d, contents: d.contents.map((x) => (x.id === id ? { ...x, sort: r.sort } : x)) };
+        });
+        adopt();
+      } catch (e) {
+        toast(e instanceof Error ? e.message : "排序保存失败", "error");
+        await loadList(kind);
+      }
+    },
+    [adopt, loadList, toast],
+  );
+  const reorderSites = useCallback(
+    (subset: string[], moved: { id: string }) => {
+      const k = subset.indexOf(moved.id);
+      const prev = subset[k - 1] ?? null, next = subset[k + 1] ?? null;
+      setData((d) => ({ ...d, sites: moveAfter(d.sites, moved.id, prev, next) }));
+      void persistMove("site", moved.id, prev, next);
+    },
+    [persistMove],
+  );
+  const reorderContents = useCallback(
+    (subset: string[], moved: { id: string }) => {
+      const k = subset.indexOf(moved.id);
+      const prev = subset[k - 1] ?? null, next = subset[k + 1] ?? null;
+      setData((d) => ({ ...d, contents: moveAfter(d.contents, moved.id, prev, next) }));
+      void persistMove("content", moved.id, prev, next);
+    },
+    [persistMove],
+  );
   const reorderCats = (kind: "site" | "content", ids: string[]) => {
     setData((d) => {
-      const mine = applyOrder(d.categories.filter((c) => c.kind === kind), ids);
+      const at = new Map(ids.map((id, i) => [id, i]));
+      const mine = d.categories.filter((c) => c.kind === kind).map((c) => ({ ...c, sort: at.get(c.id) ?? c.sort })).sort((a, b) => a.sort - b.sort);
       const other = d.categories.filter((c) => c.kind !== kind);
       return { ...d, categories: kind === "site" ? [...other, ...mine] : [...mine, ...other] };
     });
-    void persist("category", ids);
+    void api("/api/reorder", { body: { kind: "category", ids } }).then(adopt, async (e) => {
+      toast(e instanceof Error ? e.message : "排序保存失败", "error");
+      await loadList("category");
+    });
   };
 
+  /* ---------- local updates from the server's answer instead of downloading everything again ---------- */
+  const putSite = useCallback((s: SiteDTO) => setData((d) => ({ ...d, sites: upsert(d.sites, s, cmpSite) })), []);
+  const putContent = useCallback((c: ContentDTO) => setData((d) => ({ ...d, contents: upsert(d.contents, c, cmpContent) })), []);
+  const dropItem = useCallback((kind: "site" | "content", id: string) => setData((d) => (kind === "site" ? { ...d, sites: d.sites.filter((x) => x.id !== id) } : { ...d, contents: d.contents.filter((x) => x.id !== id) })), []);
+
   /* ---------- context menu ---------- */
-  const act = async (fn: () => Promise<unknown>, ok: string) => {
+  const act = async <R,>(fn: () => Promise<R>, ok: string, apply?: (r: R) => void) => {
     try {
-      await fn();
-      await refresh();
+      const r = await fn();
+      if (apply) {
+        apply(r);
+        adopt();
+      } else await refresh();
       toast(ok);
     } catch (e) {
       toast(e instanceof Error ? e.message : "操作失败", "error");
     }
   };
   const copyLink = (url: string) => copyText(url).then((ok) => toast(ok ? "链接已复制" : "复制失败", ok ? "ok" : "error"));
-  const moveItems = (kind: "site" | "content", id: string, currentCat: string | null): MenuItem => ({
-    key: "move",
-    label: "移动到分类",
-    icon: <MoveIcon />,
-    submenu: {
-      title: "移动到分类",
-      items: [
-        ...(kind === "site" ? siteCats : contentCats).map((c) => ({
-          key: c.id,
-          label: c.name,
-          icon: <CatIcon name={c.icon} size={15} />,
-          checked: currentCat === c.id,
-          onSelect: () => currentCat !== c.id && act(() => api(`/api/${kind === "site" ? "sites" : "contents"}/${id}`, { method: "PATCH", body: { categoryId: c.id } }), `已移动到「${c.name}」`),
-        })),
-        { key: "none", label: "未分类", icon: <CatIcon name="inbox" size={15} />, checked: !currentCat, onSelect: () => currentCat && act(() => api(`/api/${kind === "site" ? "sites" : "contents"}/${id}`, { method: "PATCH", body: { categoryId: null } }), "已移到未分类") },
-      ],
-    },
-  });
+  const moveItems = (kind: "site" | "content", id: string, currentCat: string | null): MenuItem => {
+    const patch = (categoryId: string | null, ok: string) =>
+      act(() => api<SiteDTO & ContentDTO>(`/api/${kind === "site" ? "sites" : "contents"}/${id}`, { method: "PATCH", body: { categoryId } }), ok, (r) => (kind === "site" ? putSite(r) : putContent(r)));
+    return {
+      key: "move",
+      label: "移动到分类",
+      icon: <MoveIcon />,
+      submenu: {
+        title: "移动到分类",
+        items: [
+          ...(kind === "site" ? siteCats : contentCats).map((c) => ({
+            key: c.id,
+            label: c.name,
+            icon: <CatIcon name={c.icon} size={15} />,
+            checked: currentCat === c.id,
+            onSelect: () => currentCat !== c.id && patch(c.id, `已移动到「${c.name}」`),
+          })),
+          { key: "none", label: "未分类", icon: <CatIcon name="inbox" size={15} />, checked: !currentCat, onSelect: () => currentCat && patch(null, "已移到未分类") },
+        ],
+      },
+    };
+  };
   const addBackup = async (s: SiteDTO) => {
     const url = await dialog.prompt({ title: `给「${s.name}」添加备用链接`, placeholder: "https://", confirmText: "添加", validate: (v) => (v.trim() ? null : "请输入链接") });
-    if (url) await act(() => api(`/api/sites/${s.id}/links`, { body: { url } }), "已添加备用链接");
+    if (url) await act(() => api<SiteDTO>(`/api/sites/${s.id}/links`, { body: { url } }), "已添加备用链接", putSite);
   };
-  const siteMenu = (s: SiteDTO) => (x: number, y: number) => {
+  const siteMenu = (s: SiteDTO, x: number, y: number) => {
     const links = siteLinks(s);
     if (links.length > 1) void probeAll(links.map((l) => l.url));
     const items: MenuItem[] = [
@@ -301,16 +452,16 @@ function App({ initial }: { initial: AppData }) {
       items.push(
         { sep: true, key: "s1" },
         { key: "edit", label: "编辑", icon: <EditIcon />, onSelect: () => setDrawer({ type: "site", id: s.id, edit: true }) },
-        { key: "pin", label: s.pinned ? "取消置顶" : "置顶", icon: s.pinned ? <PinOffIcon /> : <PinIcon size={15} />, onSelect: () => act(() => api(`/api/sites/${s.id}`, { method: "PATCH", body: { pinned: !s.pinned } }), s.pinned ? "已取消置顶" : "已置顶") },
+        { key: "pin", label: s.pinned ? "取消置顶" : "置顶", icon: s.pinned ? <PinOffIcon /> : <PinIcon size={15} />, onSelect: () => act(() => api<SiteDTO>(`/api/sites/${s.id}`, { method: "PATCH", body: { pinned: !s.pinned } }), s.pinned ? "已取消置顶" : "已置顶", putSite) },
         moveItems("site", s.id, s.categoryId),
         { key: "backup", label: "添加备用链接", icon: <LinkIcon />, onSelect: () => void addBackup(s) },
-        { key: "icon", label: "重新抓取图标", icon: <RefreshIcon />, onSelect: () => act(() => api(`/api/icon/site/${s.id}`, { body: { refetch: true } }), "已重新抓取图标") },
+        { key: "icon", label: "重新抓取图标", icon: <RefreshIcon />, onSelect: () => act(() => api<SiteDTO>(`/api/icon/site/${s.id}`, { body: { refetch: true } }), "已重新抓取图标", putSite) },
         { sep: true, key: "s2" },
-        { key: "del", label: "删除", icon: <TrashIcon />, danger: true, onSelect: async () => (await dialog.confirm({ title: `删除站点「${s.name}」？`, message: "删除后无法恢复。", danger: true })) && act(() => api(`/api/sites/${s.id}`, { method: "DELETE" }), "已删除") },
+        { key: "del", label: "删除", icon: <TrashIcon />, danger: true, onSelect: async () => (await dialog.confirm({ title: `删除站点「${s.name}」？`, message: "删除后无法恢复。", danger: true })) && act(() => api(`/api/sites/${s.id}`, { method: "DELETE" }), "已删除", () => dropItem("site", s.id)) },
       );
     setMenu({ x, y, title: s.name, items });
   };
-  const contentMenu = (c: ContentDTO) => (x: number, y: number) => {
+  const contentMenu = (c: ContentDTO, x: number, y: number) => {
     const items: MenuItem[] = [
       { key: "open", label: "打开原文", icon: <OpenIcon />, onSelect: () => location.assign(c.url) },
       { key: "tab", label: "在新标签页打开", icon: <ExternalIcon />, onSelect: () => window.open(c.url, "_blank", "noopener") },
@@ -320,14 +471,30 @@ function App({ initial }: { initial: AppData }) {
       items.push(
         { sep: true, key: "s1" },
         { key: "edit", label: "编辑", icon: <EditIcon />, onSelect: () => setDrawer({ type: "content", id: c.id, edit: true }) },
-        { key: "pin", label: c.pinned ? "取消置顶" : "置顶", icon: c.pinned ? <PinOffIcon /> : <PinIcon size={15} />, onSelect: () => act(() => api(`/api/contents/${c.id}`, { method: "PATCH", body: { pinned: !c.pinned } }), c.pinned ? "已取消置顶" : "已置顶") },
+        { key: "pin", label: c.pinned ? "取消置顶" : "置顶", icon: c.pinned ? <PinOffIcon /> : <PinIcon size={15} />, onSelect: () => act(() => api<ContentDTO>(`/api/contents/${c.id}`, { method: "PATCH", body: { pinned: !c.pinned } }), c.pinned ? "已取消置顶" : "已置顶", putContent) },
         moveItems("content", c.id, c.categoryId),
-        { key: "icon", label: "重新抓取图标", icon: <RefreshIcon />, onSelect: () => act(() => api(`/api/icon/content/${c.id}`, { body: { refetch: true } }), "已重新抓取图标") },
+        { key: "icon", label: "重新抓取图标", icon: <RefreshIcon />, onSelect: () => act(() => api<ContentDTO>(`/api/icon/content/${c.id}`, { body: { refetch: true } }), "已重新抓取图标", putContent) },
         { sep: true, key: "s2" },
-        { key: "del", label: "删除", icon: <TrashIcon />, danger: true, onSelect: async () => (await dialog.confirm({ title: "删除这条收藏？", message: c.title, danger: true })) && act(() => api(`/api/contents/${c.id}`, { method: "DELETE" }), "已删除") },
+        { key: "del", label: "删除", icon: <TrashIcon />, danger: true, onSelect: async () => (await dialog.confirm({ title: "删除这条收藏？", message: c.title, danger: true })) && act(() => api(`/api/contents/${c.id}`, { method: "DELETE" }), "已删除", () => dropItem("content", c.id)) },
       );
     setMenu({ x, y, title: c.title, items });
   };
+  // stable callbacks for the (memoised) cards; they always call the latest menu builders
+  const menus = useRef({ siteMenu, contentMenu });
+  menus.current = { siteMenu, contentMenu };
+  const onSiteMenu = useCallback((s: SiteDTO, x: number, y: number) => menus.current.siteMenu(s, x, y), []);
+  const onContentMenu = useCallback((c: ContentDTO, x: number, y: number) => menus.current.contentMenu(c, x, y), []);
+  const onContentOpen = useCallback((c: ContentDTO) => setDrawer({ type: "content", id: c.id }), []);
+  const onAdded = useCallback(
+    (r: { kind: "site"; site: SiteDTO; mergedFrom?: string } | { kind: "content"; content: ContentDTO }) => {
+      if (r.kind === "site") {
+        if (r.mergedFrom) dropItem("site", r.mergedFrom);
+        putSite(r.site);
+      } else putContent(r.content);
+      adopt();
+    },
+    [adopt, dropItem, putContent, putSite],
+  );
 
   const railCats = rail.filter((r) => r.sortable);
   const railBtn = (r: RailItem, h: HandleProps = {}) => (
@@ -399,16 +566,8 @@ function App({ initial }: { initial: AppData }) {
           <div className="content" style={{ minWidth: 0 }}>
             {tab === "sites" && (
               <section className="block" role="tabpanel">
-                {sites.length ? (
-                  <SortList ids={sites.map((s) => s.id)} enabled={admin} onReorder={reorderSites} overlay={(id) => { const s = sites.find((x) => x.id === id); return s ? <SiteCard site={s} index={0} overlay /> : null; }}>
-                    <SiteGrid count={sites.length}>
-                      {sites.map((s, i) => (
-                        <SortItem key={s.id} id={s.id}>
-                          {(h) => <SiteCard site={s} index={i} handle={h} onMenu={siteMenu(s)} failover={data.siteFailover} />}
-                        </SortItem>
-                      ))}
-                    </SiteGrid>
-                  </SortList>
+                {sites.length || !sitesLoaded ? (
+                  <SitesBlock key={cat.sites} sites={sites} total={sitesTotal} sortable={admin && sitesLoaded} onReorder={reorderSites} menu={onSiteMenu} failover={data.siteFailover} />
                 ) : (
                   <p className="empty">还没有站点</p>
                 )}
@@ -416,19 +575,8 @@ function App({ initial }: { initial: AppData }) {
             )}
             {tab === "contents" && (
               <section className="block" role="tabpanel">
-                {contents.length ? (
-                  <SortList ids={contents.map((c) => c.id)} enabled={admin} onReorder={reorderContents} overlay={(id) => { const c = contents.find((x) => x.id === id); return c ? <ContentCard c={c} index={0} overlay onOpen={() => {}} /> : null; }}>
-                    <Masonry count={contents.length}>
-                      {(i) => {
-                        const c = contents[i];
-                        return (
-                          <SortItem key={c.id} id={c.id}>
-                            {(h) => <ContentCard c={c} index={i} handle={h} onMenu={contentMenu(c)} onOpen={() => setDrawer({ type: "content", id: c.id })} />}
-                          </SortItem>
-                        );
-                      }}
-                    </Masonry>
-                  </SortList>
+                {!contentsLoaded ? null : contents.length ? (
+                  <ContentsBlock key={cat.contents} contents={contents} sortable={admin} onReorder={reorderContents} menu={onContentMenu} open={onContentOpen} jump={jump} />
                 ) : (
                   <p className="empty">还没有收藏</p>
                 )}
@@ -463,7 +611,7 @@ function App({ initial }: { initial: AppData }) {
       <ContextMenu state={menu} onClose={closeMenu} />
       <Drawer target={drawer} data={data} onClose={() => setDrawer(null)} refresh={refresh} />
       <CommandPalette open={palette} onClose={() => setPalette(false)} data={data} onOpenItem={openItem} />
-      {admin && <AddDialog open={adding} onClose={() => setAdding(false)} refresh={refresh} aiEnabled={data.aiEnabled} />}
+      {admin && <AddDialog open={adding} onClose={() => setAdding(false)} refresh={refresh} onAdded={onAdded} aiEnabled={data.aiEnabled} />}
       <Assistant open={chat} setOpen={setChat} admin={admin} aiEnabled={data.aiEnabled} refresh={refresh} onOpenItem={openItem} />
     </>
   );

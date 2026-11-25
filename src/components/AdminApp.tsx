@@ -1,8 +1,8 @@
 "use client";
 import { motion } from "framer-motion";
 import Link from "next/link";
-import { useCallback, useMemo, useState } from "react";
-import type { AppData, CategoryDTO, CategoryKind } from "@/lib/types";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { AdminData, AdminRow, CategoryDTO, CategoryKind } from "@/lib/types";
 import { api } from "@/lib/client";
 import { cn } from "@/lib/utils";
 import { Starfield } from "./Starfield";
@@ -10,7 +10,8 @@ import { ThemeToggle } from "./ThemeToggle";
 import { useToast } from "./ui/toast";
 import { UIProvider, useDialog } from "./ui/dialog";
 import { Button } from "./ui/button";
-import { Input, Select, type SelectOption } from "./ui/input";
+import { Input, Select, SelectTrigger, SharedSelect, type SelectOption } from "./ui/input";
+import { useViewWindow } from "./ui/virtual";
 import { SortItem, SortList } from "./ui/sortable";
 import { ArrowLeftIcon, CATEGORY_ICONS, CATEGORY_ICON_LABELS, CatIcon, GripIcon, LEGACY_GLYPHS, TrashIcon } from "./Icons";
 import { BrandOrb } from "./NoctaApp";
@@ -22,7 +23,7 @@ type Section = "dash" | "cats" | "items" | "sys";
 const SECTIONS = ["dash", "cats", "items", "sys"] as const;
 export type AdminView = { sec?: string; tab?: string };
 
-export function AdminApp(props: { initial: AppData; view?: AdminView }) {
+export function AdminApp(props: { initial: AdminData; view?: AdminView }) {
   return (
     <UIProvider>
       <Admin {...props} />
@@ -31,7 +32,7 @@ export function AdminApp(props: { initial: AppData; view?: AdminView }) {
 }
 
 /** admin section + settings tab live in the URL (?sec=cats, ?tab=ai) so reload / share keeps them */
-function Admin({ initial, view }: { initial: AppData; view?: AdminView }) {
+function Admin({ initial, view }: { initial: AdminData; view?: AdminView }) {
   const [data, setData] = useState(initial);
   const [sec, setSecState] = useState<Section>(isSettingTab(view?.tab) ? "sys" : (SECTIONS as readonly string[]).includes(view?.sec ?? "") ? (view!.sec as Section) : "dash");
   const [tab, setTabState] = useState<SettingTab>(isSettingTab(view?.tab) ? view!.tab : "access");
@@ -47,7 +48,7 @@ function Admin({ initial, view }: { initial: AppData; view?: AdminView }) {
     setTabState(t);
     syncUrl("sys", t);
   };
-  const refresh = useCallback(async () => setData(await api<AppData>("/api/data")), []);
+  const refresh = useCallback(async () => setData(await api<AdminData>("/api/admin/data")), []);
   const setCatOrder = (kind: CategoryKind, ids: string[]) =>
     setData((d) => {
       const at = new Map(ids.map((id, i) => [id, i]));
@@ -102,13 +103,13 @@ function Admin({ initial, view }: { initial: AppData; view?: AdminView }) {
   );
 }
 
-function Dash({ data }: { data: AppData }) {
-  const week = Date.now() - 7 * 86400000;
+function Dash({ data }: { data: AdminData }) {
+  const st = data.stats;
   const tiles = [
-    { label: "站点", v: data.sites.length, d: `${data.categories.filter((c) => c.kind === "site").length} 个分类` },
-    { label: "收藏内容", v: data.contents.length, d: `本周新增 ${data.contents.filter((c) => new Date(c.createdAt).getTime() > week).length}` },
-    { label: "未读", v: data.contents.filter((c) => !c.read).length, d: "收藏后还没打开" },
-    { label: "监控", v: data.monitors.length, d: `${data.monitors.filter((m) => m.status === "down" || m.status === "warn").length} 个异常`, bad: data.monitors.some((m) => m.status === "down") },
+    { label: "站点", v: st.sites, d: `${data.categories.filter((c) => c.kind === "site").length} 个分类` },
+    { label: "收藏内容", v: st.contents, d: `本周新增 ${st.weekNew}` },
+    { label: "未读", v: st.unread, d: "收藏后还没打开" },
+    { label: "监控", v: st.monitors, d: `${st.bad} 个异常`, bad: st.down > 0 },
   ];
   return (
     <>
@@ -124,14 +125,14 @@ function Dash({ data }: { data: AppData }) {
       <div className="panel mt-4">
         <div className="ph"><h3>最近收藏</h3><small>最新 8 条</small></div>
         <div className="grid gap-2 mt-3">
-          {data.contents.slice(0, 8).map((c) => (
+          {data.recent.map((c) => (
             <a key={c.id} className="res-row" href={c.url} target="_blank" rel="noopener noreferrer">
               <Tile src={c.icon} name={c.domain} size="sm" />
               <span className="truncate flex-1">{c.title}</span>
               <small style={{ color: "var(--text3)" }}>{c.domain}</small>
             </a>
           ))}
-          {!data.contents.length && <p className="empty">还没有收藏。</p>}
+          {!data.recent.length && <p className="empty">还没有收藏。</p>}
         </div>
       </div>
     </>
@@ -228,68 +229,164 @@ function CatEditor({ kind, title, cats, refresh, setCats }: { kind: CategoryKind
   );
 }
 
-function Items({ data, refresh }: { data: AppData; refresh: () => Promise<void> }) {
+const PAGE = 100;
+type SortKey = "default" | "title" | "kind" | "category" | "date";
+
+/**
+ * 书签管理 (v0.4.0): searched, sorted and paged by the server; only the rows near the viewport are rendered
+ * (pages are fetched as they scroll into view), and one dropdown is shared by all rows.
+ */
+function Items({ data, refresh }: { data: AdminData; refresh: () => Promise<void> }) {
   const toast = useToast();
   const dialog = useDialog();
   const [q, setQ] = useState("");
-  const catName = (id: string | null) => data.categories.find((c) => c.id === id)?.name ?? "未分类";
-  const rows = useMemo(() => {
-    const s = q.trim().toLowerCase();
-    const all = [
-      ...data.sites.map((x) => ({ id: x.id, kind: "site" as const, title: x.name, url: x.url, icon: x.icon, domain: x.url, categoryId: x.categoryId, tags: "", date: x.createdAt })),
-      ...data.contents.map((x) => ({ id: x.id, kind: "content" as const, title: x.title, url: x.url, icon: x.icon, domain: x.domain, categoryId: x.categoryId, tags: x.tags.join(" · "), date: x.createdAt })),
-    ];
-    return all.filter((r) => !s || `${r.title} ${r.url} ${r.tags} ${catName(r.categoryId)}`.toLowerCase().includes(s));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, q]);
-  const move = async (kind: "site" | "content", id: string, categoryId: string) => {
+  const [dq, setDq] = useState("");
+  const [sort, setSort] = useState<{ key: SortKey; dir: "asc" | "desc" }>({ key: "default", dir: "asc" });
+  const [total, setTotal] = useState<number | null>(null);
+  const [pages, setPages] = useState<Map<number, AdminRow[]>>(new Map());
+  const [gen, setGen] = useState(0);
+  const genRef = useRef(0);
+  genRef.current = gen;
+  const inflight = useRef(new Set<string>());
+  const [rowH, setRowH] = useState(53);
+  const body = useRef<HTMLTableSectionElement>(null);
+  const [pick, setPick] = useState<{ el: HTMLElement; row: AdminRow } | null>(null);
+
+  useEffect(() => {
+    const t = setTimeout(() => setDq(q.trim()), 200);
+    return () => clearTimeout(t);
+  }, [q]);
+  // new query / order → start over
+  useEffect(() => {
+    setPages(new Map());
+    inflight.current.clear();
+    setGen((g) => g + 1);
+  }, [dq, sort]);
+
+  const fetchPage = useCallback(
+    async (p: number, g: number) => {
+      const key = `${g}:${p}`;
+      if (inflight.current.has(key)) return;
+      inflight.current.add(key);
+      try {
+        const r = await api<{ rows: AdminRow[]; total: number }>(`/api/admin/items?q=${encodeURIComponent(dq)}&sort=${sort.key}&dir=${sort.dir}&offset=${p * PAGE}&limit=${PAGE}`);
+        if (genRef.current === g) {
+          setTotal(r.total);
+          setPages((m) => new Map(m).set(p, r.rows));
+        }
+      } catch (e) {
+        inflight.current.delete(key);
+        toast(e instanceof Error ? e.message : "加载失败", "error");
+      }
+    },
+    [dq, sort, toast],
+  );
+
+  const win = useViewWindow(body, rowH * 10);
+  const n = total ?? 0;
+  const over = typeof window === "undefined" ? 0 : innerHeight;
+  const i0 = total == null || !win ? 0 : Math.max(0, Math.floor((win[0] - over) / rowH));
+  const i1 = total == null ? 0 : !win ? Math.min(n, 40) : Math.min(n, Math.ceil((win[1] + over) / rowH));
+  useEffect(() => {
+    if (total == null) return void fetchPage(0, gen);
+    for (let p = Math.floor(i0 / PAGE); p <= Math.floor(Math.max(i0, i1 - 1) / PAGE); p++) if (!pages.has(p)) void fetchPage(p, gen);
+  }, [i0, i1, total, pages, gen, fetchPage]);
+  // row pitch: measured once from the first rendered rows (and again when the width changes). Rows can differ a
+  // little (wrapping on narrow screens); re-measuring on every render would chase that and never settle.
+  const measuredW = useRef(0);
+  useEffect(() => {
+    const tb = body.current;
+    if (!tb) return;
+    const w = tb.getBoundingClientRect().width;
+    if (measuredW.current && Math.abs(measuredW.current - w) < 1) return;
+    const trs = [...tb.querySelectorAll("tr[data-row]")].slice(0, 20) as HTMLElement[];
+    if (trs.length < Math.min(5, total ?? 0)) return;
+    measuredW.current = w;
+    const h = trs.reduce((a, tr) => a + tr.getBoundingClientRect().height, 0) / trs.length;
+    if (h && Math.abs(h - rowH) > 0.5) setRowH(h);
+  });
+
+  const reload = () => {
+    setPages(new Map());
+    inflight.current.clear();
+    setGen((g) => g + 1);
+    void refresh();
+  };
+  const patchRow = (id: string, f: (r: AdminRow) => AdminRow) => setPages((m) => new Map([...m].map(([k, rows]) => [k, rows.map((r) => (r.id === id ? f(r) : r))])));
+  const move = async (r: AdminRow, categoryId: string) => {
     try {
-      await api(`/api/${kind === "site" ? "sites" : "contents"}/${id}`, { method: "PATCH", body: { categoryId: categoryId || null } });
-      await refresh();
+      await api(`/api/${r.kind === "site" ? "sites" : "contents"}/${r.id}`, { method: "PATCH", body: { categoryId: categoryId || null } });
+      if (sort.key === "category" || dq) reload();
+      else {
+        patchRow(r.id, (x) => ({ ...x, categoryId: categoryId || null }));
+        void refresh();
+      }
       toast("已移动");
     } catch (e) {
       toast(e instanceof Error ? e.message : "失败", "error");
     }
   };
-  const del = async (kind: "site" | "content", id: string, title: string) => {
-    if (!(await dialog.confirm({ title: `删除${kind === "site" ? "站点" : "收藏"}「${title}」？`, message: "删除后无法恢复。", danger: true }))) return;
+  const del = async (r: AdminRow) => {
+    if (!(await dialog.confirm({ title: `删除${r.kind === "site" ? "站点" : "收藏"}「${r.title}」？`, message: "删除后无法恢复。", danger: true }))) return;
     try {
-      await api(`/api/${kind === "site" ? "sites" : "contents"}/${id}`, { method: "DELETE" });
-      await refresh();
+      await api(`/api/${r.kind === "site" ? "sites" : "contents"}/${r.id}`, { method: "DELETE" });
+      reload();
       toast("已删除");
     } catch (e) {
       toast(e instanceof Error ? e.message : "删除失败", "error");
     }
   };
-  const catOpts = (kind: "site" | "content"): SelectOption[] => [{ value: "", label: "未分类", icon: <CatIcon name="inbox" /> }, ...data.categories.filter((c) => c.kind === kind).map((c) => ({ value: c.id, label: c.name, icon: <CatIcon name={c.icon} /> }))];
+  const catOpts = useMemo(() => {
+    const mk = (kind: "site" | "content"): SelectOption[] => [{ value: "", label: "未分类", icon: <CatIcon name="inbox" /> }, ...data.categories.filter((c) => c.kind === kind).map((c) => ({ value: c.id, label: c.name, icon: <CatIcon name={c.icon} /> }))];
+    return { site: mk("site"), content: mk("content") };
+  }, [data.categories]);
+
+  const th = (key: SortKey, label: string) => {
+    const on = sort.key === key;
+    return (
+      <th aria-sort={on ? (sort.dir === "asc" ? "ascending" : "descending") : undefined} style={{ cursor: "pointer", userSelect: "none" }} onClick={() => setSort(on ? (sort.dir === "asc" ? { key, dir: "desc" } : { key: "default", dir: "asc" }) : { key, dir: key === "date" ? "desc" : "asc" })}>
+        {label}
+        {on ? (sort.dir === "asc" ? " ↑" : " ↓") : ""}
+      </th>
+    );
+  };
+  const rows: (AdminRow | null)[] = [];
+  for (let i = i0; i < i1; i++) rows.push(pages.get(Math.floor(i / PAGE))?.[i % PAGE] ?? null);
   return (
     <>
       <div className="a-h">
-        <div><h2>书签管理</h2><p>{rows.length} 条</p></div>
+        <div><h2>书签管理</h2><p>{total ?? "…"} 条</p></div>
         <label className="searchbox"><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="搜索标题、网址、标签、分类" aria-label="搜索" /></label>
       </div>
       <div className="tbl-wrap">
         <table className="tbl">
           <thead>
-            <tr><th>标题</th><th>类型</th><th>分类</th><th>标签</th><th>日期</th><th>操作</th></tr>
+            <tr>{th("title", "标题")}{th("kind", "类型")}{th("category", "分类")}<th>标签</th>{th("date", "日期")}<th>操作</th></tr>
           </thead>
-          <tbody>
-            {rows.map((r) => (
-              <tr key={r.kind + r.id}>
-                <td><a className="tt" href={r.url} target="_blank" rel="noopener noreferrer"><Tile src={r.icon} name={r.title} size="xs" /><span>{r.title}</span></a></td>
-                <td><span className="tag">{r.kind === "site" ? "站点" : "内容"}</span></td>
-                <td>
-                  <Select size="sm" ariaLabel="分类" value={r.categoryId ?? ""} onChange={(v) => move(r.kind, r.id, v)} options={catOpts(r.kind)} />
-                </td>
-                <td style={{ color: "var(--text3)", fontSize: 12 }}>{r.tags}</td>
-                <td style={{ color: "var(--text3)", fontSize: 12, whiteSpace: "nowrap" }}>{r.date.slice(0, 10)}</td>
-                <td><div className="ops"><button aria-label={`删除 ${r.title}`} onClick={() => del(r.kind, r.id, r.title)}><TrashIcon /></button></div></td>
-              </tr>
-            ))}
+          <tbody ref={body}>
+            {i0 > 0 && <tr aria-hidden="true" style={{ height: i0 * rowH }}><td colSpan={6} style={{ padding: 0, border: 0 }} /></tr>}
+            {rows.map((r, k) =>
+              r ? (
+                <tr key={r.kind + r.id} data-row>
+                  <td><a className="tt" href={r.url} target="_blank" rel="noopener noreferrer"><Tile src={r.icon} name={r.title} size="xs" /><span>{r.title}</span></a></td>
+                  <td><span className="tag">{r.kind === "site" ? "站点" : "内容"}</span></td>
+                  <td>
+                    <SelectTrigger size="sm" ariaLabel="分类" value={r.categoryId ?? ""} options={catOpts[r.kind]} open={pick?.row.id === r.id} onOpen={(el) => setPick(pick?.row.id === r.id ? null : { el, row: r })} />
+                  </td>
+                  <td style={{ color: "var(--text3)", fontSize: 12 }}>{r.tags}</td>
+                  <td style={{ color: "var(--text3)", fontSize: 12, whiteSpace: "nowrap" }}>{r.date.slice(0, 10)}</td>
+                  <td><div className="ops"><button aria-label={`删除 ${r.title}`} onClick={() => del(r)}><TrashIcon /></button></div></td>
+                </tr>
+              ) : (
+                <tr key={`ph${i0 + k}`} aria-hidden="true" style={{ height: rowH }}><td colSpan={6} /></tr>
+              ),
+            )}
+            {i1 < n && <tr aria-hidden="true" style={{ height: (n - i1) * rowH }}><td colSpan={6} style={{ padding: 0, border: 0 }} /></tr>}
           </tbody>
         </table>
-        {!rows.length && <p className="empty" style={{ margin: 16 }}>没有匹配的书签</p>}
+        {total === 0 && <p className="empty" style={{ margin: 16 }}>没有匹配的书签</p>}
       </div>
+      <SharedSelect anchor={pick?.el ?? null} value={pick?.row.categoryId ?? ""} options={pick ? catOpts[pick.row.kind] : []} ariaLabel="分类" onPick={(v) => pick && move(pick.row, v)} onClose={() => setPick(null)} />
     </>
   );
 }

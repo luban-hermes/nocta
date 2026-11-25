@@ -134,7 +134,7 @@ export async function createSiteFromUrl(u: URL, opts: { name?: string; categoryI
   const max = await prisma.site.aggregate({ _max: { sort: true } });
   const created = await prisma.site.create({
     data: {
-      sort: (max._max.sort ?? -1) + 1,
+      sort: (max._max.sort ?? 0) + 1024, // gaps leave room for single-row reorders (v0.4.0)
       name: clip(opts.name || ai?.name || brand || domainOf(u.toString()), 40),
       url: u.toString(),
       description: clip(ai?.description || meta.description || "", 200),
@@ -157,7 +157,7 @@ export async function createContentFromUrl(u: URL, opts: { categoryId?: string }
   const min = await prisma.content.aggregate({ _min: { sort: true } });
   const created = await prisma.content.create({
     data: {
-      sort: (min._min.sort ?? 1) - 1, // newest first
+      sort: (min._min.sort ?? 1024) - 1024, // newest first; gaps leave room for single-row reorders (v0.4.0)
       url: u.toString(),
       title: clip(ai?.title || meta.title || u.toString(), 200),
       summary: clip(ai?.summary || ruleSummary(meta), 300),

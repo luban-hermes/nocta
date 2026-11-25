@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { isAdmin, needsSetup } from "@/lib/auth";
-import { loadAppData } from "@/lib/data";
+import { loadAdminData } from "@/lib/data";
 import { AdminApp } from "@/components/AdminApp";
 
 export const metadata: Metadata = { title: "夜航后台" };
@@ -12,5 +12,5 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
   const one = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v);
   if (await needsSetup()) redirect("/setup");
   if (!(await isAdmin())) redirect(`/login?next=${encodeURIComponent("/admin" + (q.tab ? `?tab=${one(q.tab)}` : q.sec ? `?sec=${one(q.sec)}` : ""))}`);
-  return <AdminApp initial={await loadAppData()} view={{ sec: one(q.sec), tab: one(q.tab) }} />;
+  return <AdminApp initial={await loadAdminData()} view={{ sec: one(q.sec), tab: one(q.tab) }} />;
 }

@@ -19,7 +19,9 @@ const MODES: { id: Mode; label: string }[] = [
   { id: "server", label: "服务器" },
 ];
 
-export function AddDialog({ open, onClose, refresh, aiEnabled }: { open: boolean; onClose: () => void; refresh: () => Promise<void>; aiEnabled: boolean }) {
+export type Added = { kind: "site"; site: SiteDTO; mergedFrom?: string } | { kind: "content"; content: ContentDTO };
+
+export function AddDialog({ open, onClose, refresh, onAdded, aiEnabled }: { open: boolean; onClose: () => void; refresh: () => Promise<void>; /** put the new bookmark into the list from the answer (no full reload) */ onAdded?: (r: Added) => void; aiEnabled: boolean }) {
   const toast = useToast();
   const [mode, setMode] = useState<Mode>("bookmark");
   const [url, setUrl] = useState("");
@@ -56,6 +58,11 @@ export function AddDialog({ open, onClose, refresh, aiEnabled }: { open: boolean
         setRes(r);
         setBackups([]);
         toast(r.kind === "site" ? "已添加到站点导航" : "已添加到收藏内容");
+        if (onAdded) {
+          onAdded(r.kind === "site" ? { kind: "site", site: r.site } : { kind: "content", content: r.content });
+          setUrl("");
+          return;
+        }
       } else {
         const m = await api<MonitorDTO>("/api/monitors", { body: mode === "server" ? { kind: "server", ssh: url, name: name || undefined, interval: Math.min(interval, 300) } : { kind: "http", url, name: name || undefined, interval } });
         setMon(m);
@@ -138,7 +145,8 @@ export function AddDialog({ open, onClose, refresh, aiEnabled }: { open: boolean
                     const s = await api<SiteDTO>(`/api/sites/${res.site.id}/merge`, { body: { into: res.similar.id } });
                     setRes({ ...res, site: s, similar: null });
                     toast(`已作为「${s.name}」的备用链接`);
-                    await refresh();
+                    if (onAdded) onAdded({ kind: "site", site: s, mergedFrom: res.site.id });
+                    else await refresh();
                   } catch (e) {
                     toast(e instanceof Error ? e.message : "合并失败", "error");
                   } finally {

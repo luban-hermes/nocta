@@ -13,17 +13,22 @@ async function load(kind: string, id: string) {
   return null;
 }
 
-/** the cached icon of a bookmark (the URL carries ?v=… so it can be cached for long) */
+/**
+ * /api/icon/f/<file>?v=<version> — one cached icon file (v0.4.0: shared by every bookmark on that host,
+ * the version changes when the file is rewritten, so it is cached as immutable).
+ * /api/icon/<site|content>/<id> — the icon of one bookmark (older URLs, still served).
+ */
 export async function GET(_req: Request, { params }: Ctx) {
   if (!(await canView())) return new Response(null, { status: 401 });
   const { kind, id } = await params;
-  const rec = await load(kind, id);
-  const file = rec?.iconFile ? await readIcon(rec.iconFile) : null;
+  const byFile = kind === "f";
+  const name = byFile ? decodeURIComponent(id) : (await load(kind, id))?.iconFile;
+  const file = name && /^[\w.-]+$/.test(name) ? await readIcon(name) : null;
   if (!file) return new Response(null, { status: 404, headers: { "cache-control": "no-store" } });
   return new Response(new Uint8Array(file.buf), {
     headers: {
       "content-type": file.type,
-      "cache-control": "public, max-age=604800, stale-while-revalidate=86400",
+      "cache-control": byFile ? "private, max-age=31536000, immutable" : "private, max-age=604800, stale-while-revalidate=86400",
       "x-content-type-options": "nosniff",
       // SVG icons must never run script, even when opened directly
       "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox",

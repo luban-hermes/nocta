@@ -1,11 +1,11 @@
 "use client";
 import {
-  DndContext, DragOverlay, KeyboardSensor, MouseSensor, TouchSensor, closestCenter, useSensor, useSensors, type DragEndEvent, type DragStartEvent, type UniqueIdentifier,
+  DndContext, DragOverlay, KeyboardSensor, MeasuringStrategy, MouseSensor, TouchSensor, closestCenter, useSensor, useSensors, type DragEndEvent, type DragStartEvent, type UniqueIdentifier,
 } from "@dnd-kit/core";
 import { restrictToHorizontalAxis, restrictToVerticalAxis } from "./sortable-modifiers";
 import { SortableContext, arrayMove, rectSortingStrategy, sortableKeyboardCoordinates, useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { createContext, useContext, useEffect, useState, type CSSProperties, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "@/lib/utils";
 import { dragState } from "./context-menu";
@@ -29,6 +29,7 @@ function eatNextClick() {
 }
 
 const Enabled = createContext(false);
+const MEASURE_ALWAYS = { droppable: { strategy: MeasuringStrategy.Always } };
 
 export function SortList({
   ids,
@@ -36,9 +37,12 @@ export function SortList({
   onReorder,
   axis,
   overlay,
+  virtual,
   children,
 }: {
   ids: string[];
+  /** the list is virtualised: items mount while dragging (auto-scroll), so droppables are measured continuously */
+  virtual?: boolean;
   enabled: boolean;
   onReorder: (ids: string[], moved: { id: string; from: number; to: number }) => void;
   axis?: "x" | "y";
@@ -71,6 +75,7 @@ export function SortList({
       <DndContext
         sensors={sensors}
         collisionDetection={closestCenter}
+        measuring={virtual ? MEASURE_ALWAYS : undefined}
         modifiers={axis === "x" ? [restrictToHorizontalAxis] : axis === "y" ? [restrictToVerticalAxis] : undefined}
         onDragStart={(e: DragStartEvent) => {
           dragState.active = true;
@@ -122,6 +127,8 @@ export type HandleProps = {
   "aria-describedby"?: string;
 };
 
+const NO_HANDLE: HandleProps = Object.freeze({}) as HandleProps;
+
 /** combine several prop bags; handlers with the same name all run (drag sensor + long-press + own) */
 export function mergeHandlers(...bags: (HandleProps | Record<string, unknown> | undefined)[]): HandleProps {
   const out: Record<string, unknown> = {};
@@ -139,13 +146,15 @@ export function mergeHandlers(...bags: (HandleProps | Record<string, unknown> | 
  */
 export function SortItem({ id, className, style, children, as = "div" }: { id: string; className?: string; style?: CSSProperties; as?: "div" | "li"; children: (h: HandleProps, dragging: boolean) => ReactNode }) {
   const enabled = useContext(Enabled);
-  return enabled ? <Live id={id} className={className} style={style} as={as}>{children}</Live> : as === "li" ? <li className={className} style={style}>{children({}, false)}</li> : <div className={className} style={style}>{children({}, false)}</div>;
+  return enabled ? <Live id={id} className={className} style={style} as={as}>{children}</Live> : as === "li" ? <li className={className} style={style}>{children(NO_HANDLE, false)}</li> : <div className={className} style={style}>{children(NO_HANDLE, false)}</div>;
 }
 
 function Live({ id, className, style, as, children }: { id: string; className?: string; style?: CSSProperties; as: "div" | "li"; children: (h: HandleProps, dragging: boolean) => ReactNode }) {
   const { setNodeRef, transform, transition, isDragging, listeners, attributes } = useSortable({ id, transition: { duration: 260, easing: "cubic-bezier(.22,1,.36,1)" } });
   const s: CSSProperties = { ...style, transform: CSS.Translate.toString(transform), transition, zIndex: isDragging ? 30 : undefined, position: "relative", touchAction: "manipulation" };
-  const handle = { ...(listeners as HandleProps), "aria-describedby": attributes["aria-describedby"] } as HandleProps;
+  const described = attributes["aria-describedby"];
+  // stable while nothing changes, so memoised cards do not re-render on every drag frame
+  const handle = useMemo(() => ({ ...(listeners as HandleProps), "aria-describedby": described }) as HandleProps, [listeners, described]);
   const Tag = as;
   return (
     <Tag ref={setNodeRef as never} className={cn("sort-item", isDragging && "is-dragging", className)} style={s}>

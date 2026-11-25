@@ -151,20 +151,24 @@ kbd{font-family:var(--mono);font-size:12px;padding:3px 7px;border-radius:7px;bor
 /* site cards */
 /* v0.3.1: no content-visibility / contain here — paint containment clipped the hover lift + shadow of edge cards.
    justify-content/justify-items:start → a short row always starts at the left edge, never centred. */
-.sites{display:grid;grid-template-columns:repeat(auto-fill,minmax(118px,1fr));justify-content:start;gap:14px;perspective:900px}
+.sites{display:grid;grid-template-columns:repeat(auto-fill,minmax(118px,1fr));justify-content:start;gap:14px}
 .sites>*:hover,.x-mgrid>*:hover,.mcol>*:hover{position:relative;z-index:2}
 .x-mon-wrap{display:flex;flex-direction:column;min-width:0}.x-mon-wrap>.x-mon{flex:1}
-.site{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;aspect-ratio:1/1.02;border-radius:22px;background:var(--card);border:1px solid var(--line);overflow:hidden;transform-style:preserve-3d;transition:transform .5s var(--spring),box-shadow .35s var(--ease),border-color .35s;isolation:isolate}
+.site{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;aspect-ratio:1/1.02;border-radius:22px;background:var(--card);border:1px solid var(--line);overflow:hidden;transition:transform .5s var(--spring),box-shadow .35s var(--ease),border-color .35s;isolation:isolate}
 .site::before{content:"";position:absolute;inset:0;z-index:-1;background:radial-gradient(220px circle at var(--x,50%) var(--y,50%),rgba(var(--acc-rgb),.16),transparent 62%);opacity:0;transition:opacity .3s}
 .site::after{content:"";position:absolute;inset:0;border-radius:inherit;padding:1px;background:radial-gradient(150px circle at var(--x,50%) var(--y,50%),rgba(var(--acc-rgb),.8),transparent 70%);-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude;opacity:0;transition:opacity .3s;pointer-events:none}
-.site.is-hot{will-change:transform;transform:perspective(700px) rotateX(var(--rx,0deg)) rotateY(var(--ry,0deg)) translateY(-6px);transition:box-shadow .35s var(--ease),border-color .35s}
+.site.is-hot{will-change:transform;transform-style:preserve-3d;transform:perspective(700px) rotateX(var(--rx,0deg)) rotateY(var(--ry,0deg)) translateY(-6px);transition:box-shadow .35s var(--ease),border-color .35s}
 .site.is-hot::before,.site.is-hot::after{opacity:1}
 .site:hover{box-shadow:0 20px 40px -22px rgba(var(--acc-rgb),.55);border-color:rgba(var(--acc-rgb),.18)}
-.site .tile{transform:translateZ(30px);transition:transform .4s var(--spring)}
-.site:hover .tile{transform:translateZ(40px) scale(1.06)}
-.site .nm{font-size:13px;color:var(--text2);transform:translateZ(18px);max-width:90%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;transition:color .2s}
+/* v0.4.0: the 3D layers exist only on the card under the mouse (resting cards are flat: one layer per page, not 3 per card) */
+.site .tile{transition:transform .4s var(--spring)}
+.site:hover .tile{transform:scale(1.06)}
+.site.is-hot .tile{transform:translateZ(40px) scale(1.06)}
+.site.is-hot .nm{transform:translateZ(18px)}
+.site .nm{font-size:13px;color:var(--text2);max-width:90%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;transition:color .2s}
 .site:hover .nm{color:var(--text)}
-.pin{position:absolute;top:9px;right:9px;width:20px;height:20px;border-radius:50%;display:grid;place-items:center;background:var(--chip);color:var(--c);transform:translateZ(24px)}
+.pin{position:absolute;top:9px;right:9px;width:20px;height:20px;border-radius:50%;display:grid;place-items:center;background:var(--chip);color:var(--c)}
+.site.is-hot .pin{transform:translateZ(24px)}
 .tile{width:56px;height:56px;border-radius:16px;display:grid;place-items:center;font-weight:700;font-size:20px;letter-spacing:-.5px;position:relative;overflow:hidden;background:var(--tilebg);border:1px solid var(--line2);color:color-mix(in srgb,var(--bt,var(--acc)) var(--tilew),var(--tilemix));box-shadow:0 8px 20px -10px rgba(0,0,0,.45),inset 0 1px 0 rgba(255,255,255,.08)}
 .tile::after{content:"";position:absolute;inset:0;background:linear-gradient(160deg,rgba(255,255,255,.08),transparent 46%);pointer-events:none}
 .tile svg{width:58%;height:58%}
@@ -234,6 +238,8 @@ kbd{font-family:var(--mono);font-size:12px;padding:3px 7px;border-radius:7px;bor
 .pre{opacity:0}
 .enter{animation:cardIn .45s var(--ease) both;animation-delay:calc(var(--i,0) * 35ms)}
 @keyframes cardIn{from{opacity:0;transform:translateY(18px)}}
+.card-in{animation:cardIn16 .4s var(--ease) both;animation-delay:calc(var(--i,0) * 30ms)}
+@keyframes cardIn16{from{opacity:0;transform:translateY(16px)}}
 .is-hidden{display:none!important}
 /* scrim + drawer */
 .scrim{position:fixed;inset:0;z-index:40;background:rgba(3,5,12,.6);opacity:0;pointer-events:none;transition:opacity .45s var(--ease)}

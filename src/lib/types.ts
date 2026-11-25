@@ -99,6 +99,20 @@ export interface MonitorDTO {
   spark: number[];
 }
 
+/** change markers of the three bookmark tables (v0.4.0): the client re-downloads a list only when its marker moved */
+export interface Versions {
+  s: string;
+  c: string;
+  k: string;
+}
+
+export interface Totals {
+  sites: number;
+  contents: number;
+  sitesNone: number;
+  contentsNone: number;
+}
+
 export interface AppData {
   admin: boolean;
   publicMode: boolean;
@@ -110,6 +124,29 @@ export interface AppData {
   sites: SiteDTO[];
   contents: ContentDTO[];
   monitors: MonitorDTO[];
+  /** v0.4.0: the home page ships only the first sites; the full lists are fetched after hydration */
+  partial?: { sites: boolean; contents: boolean };
+  totals?: Totals;
+  version?: Versions;
+}
+
+/** 后台 (v0.4.0): counts + the latest few items; the bookmark table is paged by the server */
+export interface AdminData {
+  categories: CategoryDTO[];
+  stats: { sites: number; contents: number; weekNew: number; unread: number; monitors: number; bad: number; down: number };
+  recent: ContentDTO[];
+}
+
+export interface AdminRow {
+  id: string;
+  kind: "site" | "content";
+  title: string;
+  url: string;
+  icon: string;
+  domain: string;
+  categoryId: string | null;
+  tags: string;
+  date: string;
 }
 
 export interface MonitorDetail {

@@ -5,6 +5,7 @@ import path from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { prisma } from "./db";
 import { iconsDir } from "./icons";
+import { iconChanged } from "./iconver";
 import { DEFS, getInternal, getSettings, saveSettings, setInternal, type SettingKey, type Settings } from "./settings";
 
 /*
@@ -243,6 +244,7 @@ export async function restoreBackup(key: string) {
     { timeout: 120_000, maxWait: 10_000 },
   );
   for (const [f, b64] of Object.entries(dump.icons ?? {})) if (/^[hu]_[\w.-]+$/.test(f)) await writeFile(path.join(iconsDir(), f), Buffer.from(b64, "base64"));
+  iconChanged();
   const portable = Object.fromEntries(Object.entries(dump.settings ?? {}).filter(([k]) => (PORTABLE as string[]).includes(k) && k in DEFS));
   if (Object.keys(portable).length) await saveSettings(portable);
   console.log(`[nocta] restored ${key}`, stats);

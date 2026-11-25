@@ -5,12 +5,14 @@ import { getSettings } from "./settings";
 import { isAdmin } from "./auth";
 import { alertOf, effectiveStatus } from "./monitor";
 import { splitTags } from "./utils";
-import type { AppData, CategoryDTO, ContentDTO, MonitorDTO, SiteDTO, Tick } from "./types";
+import { iconFileUrl } from "./iconver";
+import { createHash } from "node:crypto";
+import type { AdminData, AdminRow, AppData, CategoryDTO, ContentDTO, MonitorDTO, SiteDTO, Tick, Totals, Versions } from "./types";
 
 const TICKS = 48; // 24h in 30-minute buckets
 
-const iconUrl = (kind: "site" | "content", r: { id: string; iconFile: string; iconCheckedAt: Date | null }) =>
-  r.iconFile ? `/api/icon/${kind}/${r.id}?v=${(r.iconCheckedAt?.getTime() ?? 0).toString(36)}${r.iconFile.slice(-6).replace(/\W/g, "")}` : "";
+/** icons are served per file (shared by every bookmark on the same host) and cached as immutable — v0.4.0 */
+const iconUrl = (_kind: "site" | "content", r: { iconFile: string }) => iconFileUrl(r.iconFile);
 
 export const siteDTO = (s: Site & { links?: SiteLink[] }): SiteDTO => ({
   id: s.id,
@@ -93,59 +95,66 @@ export function monitorDTO(
   };
 }
 
-/** aggregate the last 24h into 48 availability buckets + a sparkline per monitor */
+type Bucket = { monitorId: string; b: number | bigint; n: number | bigint; okn: number | bigint | null };
+type Last = { monitorId: string; v: number | null };
+const num = (x: number | bigint | null | undefined) => Number(x ?? 0);
+
+/**
+ * aggregate the last 24h into 48 availability buckets + a sparkline per monitor.
+ * v0.4.0: grouped in SQL (one small row per monitor × bucket) instead of pulling every check into JS.
+ */
 export async function monitorsWithStats(monitors: Monitor[], admin: boolean): Promise<MonitorDTO[]> {
   if (!monitors.length) return [];
-  const since = new Date(Date.now() - 86_400_000);
-  const ids = monitors.map((m) => m.id);
-  const [checks, metrics] = await Promise.all([
-    prisma.check.findMany({ where: { monitorId: { in: ids }, createdAt: { gte: since } }, select: { monitorId: true, ok: true, latency: true, createdAt: true }, orderBy: { createdAt: "asc" } }),
-    prisma.metric.findMany({ where: { monitorId: { in: ids }, createdAt: { gte: since } }, select: { monitorId: true, cpu: true, createdAt: true }, orderBy: { createdAt: "asc" } }),
+  const t0 = Date.now() - 86_400_000;
+  const [cb, cl, mb, ml] = await Promise.all([
+    prisma.$queryRawUnsafe<Bucket[]>(`SELECT monitorId, MIN(${TICKS - 1}, CAST((createdAt - ?) * ${TICKS} / 86400000 AS INTEGER)) AS b, COUNT(*) AS n, SUM(ok) AS okn FROM "Check" WHERE createdAt >= ? GROUP BY monitorId, b`, t0, t0),
+    prisma.$queryRawUnsafe<Last[]>(`SELECT monitorId, v FROM (SELECT monitorId, latency AS v, createdAt, ROW_NUMBER() OVER (PARTITION BY monitorId ORDER BY createdAt DESC) AS rn FROM "Check" WHERE createdAt >= ?) WHERE rn <= 30 ORDER BY monitorId, createdAt ASC`, t0),
+    prisma.$queryRawUnsafe<Bucket[]>(`SELECT monitorId, MIN(${TICKS - 1}, CAST((createdAt - ?) * ${TICKS} / 86400000 AS INTEGER)) AS b, COUNT(*) AS n, NULL AS okn FROM "Metric" WHERE createdAt >= ? GROUP BY monitorId, b`, t0, t0),
+    prisma.$queryRawUnsafe<Last[]>(`SELECT monitorId, v FROM (SELECT monitorId, cpu AS v, createdAt, ROW_NUMBER() OVER (PARTITION BY monitorId ORDER BY createdAt DESC) AS rn FROM "Metric" WHERE createdAt >= ?) WHERE rn <= 30 ORDER BY monitorId, createdAt ASC`, t0),
   ]);
-  const t0 = since.getTime();
-  const bucket = (d: Date) => Math.min(TICKS - 1, Math.floor(((d.getTime() - t0) / 86_400_000) * TICKS));
+  const group = <T extends { monitorId: string }>(rows: T[]) => {
+    const m = new Map<string, T[]>();
+    for (const r of rows) (m.get(r.monitorId) ?? m.set(r.monitorId, []).get(r.monitorId)!).push(r);
+    return m;
+  };
+  const CB = group(cb), CL = group(cl), MB = group(mb), ML = group(ml);
+  const bucket = (t: number) => Math.min(TICKS - 1, Math.floor(((t - t0) / 86_400_000) * TICKS));
   return monitors.map((m) => {
     const ticks: Tick[] = Array(TICKS).fill("off");
     let spark: number[] = [];
     let uptime24h: number | null = null;
     if (m.kind === "server") {
-      const ms = metrics.filter((x) => x.monitorId === m.id);
-      for (const x of ms) ticks[bucket(x.createdAt)] = "ok";
-      spark = ms.slice(-30).map((x) => Math.round(x.cpu));
+      const bs = MB.get(m.id) ?? [];
+      for (const x of bs) ticks[num(x.b)] = "ok";
+      spark = (ML.get(m.id) ?? []).map((x) => Math.round(x.v ?? 0));
       const covered = ticks.filter((t) => t === "ok").length;
-      const firstBucket = bucket(new Date(Math.max(t0, m.createdAt.getTime())));
+      const firstBucket = bucket(Math.max(t0, m.createdAt.getTime()));
       const expected = TICKS - firstBucket;
-      uptime24h = ms.length ? Math.round((covered / Math.max(1, expected)) * 1000) / 10 : null;
-      for (let i = firstBucket; i < TICKS; i++) if (ticks[i] === "off" && i < bucket(new Date())) ticks[i] = "bad";
+      uptime24h = bs.length ? Math.round((covered / Math.max(1, expected)) * 1000) / 10 : null;
+      const nowB = bucket(Date.now());
+      for (let i = firstBucket; i < TICKS; i++) if (ticks[i] === "off" && i < nowB) ticks[i] = "bad";
     } else {
-      const cs = checks.filter((x) => x.monitorId === m.id);
-      const agg = new Map<number, { ok: number; n: number }>();
-      for (const c of cs) {
-        const b = bucket(c.createdAt);
-        const a = agg.get(b) ?? { ok: 0, n: 0 };
-        a.n++;
-        if (c.ok) a.ok++;
-        agg.set(b, a);
+      const bs = CB.get(m.id) ?? [];
+      let n = 0, ok = 0;
+      for (const x of bs) {
+        const a = num(x.n), o = num(x.okn);
+        n += a;
+        ok += o;
+        ticks[num(x.b)] = o === a ? "ok" : o === 0 ? "bad" : "warn";
       }
-      for (const [b, a] of agg) ticks[b] = a.ok === a.n ? "ok" : a.ok === 0 ? "bad" : "warn";
-      spark = cs.slice(-30).map((c) => c.latency ?? 0);
-      uptime24h = cs.length ? Math.round((cs.filter((c) => c.ok).length / cs.length) * 1000) / 10 : null;
+      spark = (CL.get(m.id) ?? []).map((x) => x.v ?? 0);
+      uptime24h = n ? Math.round((ok / n) * 1000) / 10 : null;
     }
     return monitorDTO(m, { ticks, spark, uptime24h }, admin);
   });
 }
 
-export async function loadAppData(): Promise<AppData> {
-  const admin = await isAdmin();
-  const env = await getSettings();
-  const showMonitors = admin || env.publicMonitors;
-  const [cats, sites, contents, monitors] = await Promise.all([
-    prisma.category.findMany({ orderBy: [{ kind: "asc" }, { sort: "asc" }, { createdAt: "asc" }], include: { _count: { select: { sites: true, contents: true } } } }),
-    prisma.site.findMany({ orderBy: [{ pinned: "desc" }, { sort: "asc" }, { createdAt: "asc" }], include: { links: { orderBy: { sort: "asc" } } } }),
-    prisma.content.findMany({ orderBy: [{ pinned: "desc" }, { sort: "asc" }, { createdAt: "desc" }] }),
-    showMonitors ? prisma.monitor.findMany({ orderBy: { createdAt: "asc" } }) : Promise.resolve([] as Monitor[]),
-  ]);
-  const categories: CategoryDTO[] = cats.map((c: Category & { _count: { sites: number; contents: number } }) => ({
+const SITE_ORDER = [{ pinned: "desc" as const }, { sort: "asc" as const }, { createdAt: "asc" as const }];
+const CONTENT_ORDER = [{ pinned: "desc" as const }, { sort: "asc" as const }, { createdAt: "desc" as const }];
+
+async function categoryDTOs(): Promise<CategoryDTO[]> {
+  const cats = await prisma.category.findMany({ orderBy: [{ kind: "asc" }, { sort: "asc" }, { createdAt: "asc" }], include: { _count: { select: { sites: true, contents: true } } } });
+  return cats.map((c: Category & { _count: { sites: number; contents: number } }) => ({
     id: c.id,
     kind: c.kind === "content" ? "content" : "site",
     name: c.name,
@@ -153,6 +162,59 @@ export async function loadAppData(): Promise<AppData> {
     sort: c.sort,
     count: c.kind === "content" ? c._count.contents : c._count.sites,
   }));
+}
+
+export const loadSites = async () => (await prisma.site.findMany({ orderBy: SITE_ORDER, include: { links: { orderBy: { sort: "asc" } } } })).map(siteDTO);
+export const loadContents = async () => (await prisma.content.findMany({ orderBy: CONTENT_ORDER })).map(contentDTO);
+export const loadCategories = categoryDTOs;
+
+export async function loadMonitors(admin: boolean) {
+  return monitorsWithStats(await prisma.monitor.findMany({ orderBy: { createdAt: "asc" } }), admin);
+}
+
+/** change markers: count + newest updatedAt per bookmark table, a digest of the (small) category table */
+export async function loadVersions(): Promise<Versions> {
+  const [s, c, k] = await Promise.all([
+    prisma.site.aggregate({ _count: { _all: true }, _max: { updatedAt: true } }),
+    prisma.content.aggregate({ _count: { _all: true }, _max: { updatedAt: true } }),
+    prisma.$queryRawUnsafe<{ v: string | null }[]>(`SELECT group_concat(id || ':' || name || ':' || icon || ':' || sort, '|') AS v FROM (SELECT * FROM Category ORDER BY id)`),
+  ]);
+  return {
+    s: `${s._count._all}.${s._max.updatedAt?.getTime() ?? 0}`,
+    c: `${c._count._all}.${c._max.updatedAt?.getTime() ?? 0}`,
+    k: createHash("sha1").update(k[0]?.v ?? "").digest("hex").slice(0, 12),
+  };
+}
+
+async function viewFlags() {
+  const admin = await isAdmin();
+  const env = await getSettings();
+  return { admin, env, showMonitors: admin || env.publicMonitors };
+}
+
+/** everything at once (/api/data, kept for compatibility) */
+export async function loadAppData(): Promise<AppData> {
+  const { admin, env, showMonitors } = await viewFlags();
+  const [categories, sites, contents, monitors, version] = await Promise.all([categoryDTOs(), loadSites(), loadContents(), showMonitors ? loadMonitors(admin) : Promise.resolve([]), loadVersions()]);
+  return { admin, publicMode: env.publicMode, showMonitors, aiEnabled: env.aiEnabled, siteFailover: env.siteFailover, categories, sites, contents, monitors, version };
+}
+
+/** first sites the home page renders on the server; the rest arrives after hydration (v0.4.0) */
+export const HOME_FIRST_SITES = 64;
+
+export async function loadHomeData(): Promise<AppData> {
+  const { admin, env, showMonitors } = await viewFlags();
+  const [categories, first, nS, nC, nSn, nCn, monitors, version] = await Promise.all([
+    categoryDTOs(),
+    prisma.site.findMany({ orderBy: SITE_ORDER, take: HOME_FIRST_SITES, include: { links: { orderBy: { sort: "asc" } } } }),
+    prisma.site.count(),
+    prisma.content.count(),
+    prisma.site.count({ where: { categoryId: null } }),
+    prisma.content.count({ where: { categoryId: null } }),
+    showMonitors ? loadMonitors(admin) : Promise.resolve([]),
+    loadVersions(),
+  ]);
+  const totals: Totals = { sites: nS, contents: nC, sitesNone: nSn, contentsNone: nCn };
   return {
     admin,
     publicMode: env.publicMode,
@@ -160,8 +222,74 @@ export async function loadAppData(): Promise<AppData> {
     aiEnabled: env.aiEnabled,
     siteFailover: env.siteFailover,
     categories,
-    sites: sites.map(siteDTO),
-    contents: contents.map(contentDTO),
-    monitors: await monitorsWithStats(monitors, admin),
+    sites: first.map(siteDTO),
+    contents: [],
+    monitors,
+    partial: { sites: nS > first.length, contents: nC > 0 },
+    totals,
+    version,
   };
+}
+
+/* ---------------- 后台 ---------------- */
+
+export async function loadAdminData(): Promise<AdminData> {
+  const week = new Date(Date.now() - 7 * 86_400_000);
+  const [categories, sites, contents, weekNew, unread, recent, mons] = await Promise.all([
+    categoryDTOs(),
+    prisma.site.count(),
+    prisma.content.count(),
+    prisma.content.count({ where: { createdAt: { gt: week } } }),
+    prisma.content.count({ where: { read: false } }),
+    prisma.content.findMany({ orderBy: CONTENT_ORDER, take: 8 }),
+    prisma.monitor.findMany(),
+  ]);
+  const st = mons.map((m) => effectiveStatus(m));
+  return {
+    categories,
+    stats: { sites, contents, weekNew, unread, monitors: mons.length, bad: st.filter((s) => s === "down" || s === "warn").length, down: st.filter((s) => s === "down").length },
+    recent: recent.map(contentDTO),
+  };
+}
+
+export type AdminSort = "default" | "title" | "date" | "kind" | "category";
+type RawRow = { id: string; kind: string; title: string; url: string; domain: string; categoryId: string | null; tags: string; createdAt: number | bigint; iconFile: string };
+
+/** one page of the 书签管理 table: sites + contents, searched / sorted / paged in SQL */
+export async function adminItems(o: { q?: string; sort?: AdminSort; dir?: "asc" | "desc"; offset?: number; limit?: number }) {
+  const q = (o.q ?? "").trim().toLowerCase();
+  const dir = o.dir === "desc" ? "DESC" : "ASC";
+  const limit = Math.max(1, Math.min(200, o.limit ?? 60));
+  const offset = Math.max(0, o.offset ?? 0);
+  const base = `SELECT s.id AS id, 'site' AS kind, 0 AS k, s.name AS title, s.url AS url, s.url AS domain, s.categoryId AS categoryId, '' AS tags, s.createdAt AS createdAt, s.iconFile AS iconFile, s.pinned AS pinned, s.sort AS sort, s.createdAt AS cAsc, 0 AS cDesc, COALESCE(c.name, '未分类') AS catName, c.sort AS catSort
+      FROM Site s LEFT JOIN Category c ON c.id = s.categoryId
+    UNION ALL
+    SELECT t.id, 'content', 1, t.title, t.url, t.domain, t.categoryId, t.tags, t.createdAt, t.iconFile, t.pinned, t.sort, 0, -t.createdAt, COALESCE(c.name, '未分类'), c.sort
+      FROM Content t LEFT JOIN Category c ON c.id = t.categoryId`;
+  // same text the old client-side filter matched: title, url, tags, category name (tags are stored comma separated)
+  const where = q ? `WHERE lower(title || ' ' || url || ' ' || replace(tags, ',', ' ') || ' ' || catName) LIKE ? ESCAPE '\\'` : "";
+  const like = `%${q.replace(/[\\%_]/g, (m) => "\\" + m)}%`;
+  const order =
+    o.sort === "title" ? `ORDER BY title COLLATE NOCASE ${dir}, id` :
+    o.sort === "date" ? `ORDER BY createdAt ${dir}, id` :
+    o.sort === "kind" ? `ORDER BY k ${dir}, pinned DESC, sort ASC, cAsc ASC, cDesc ASC` :
+    o.sort === "category" ? `ORDER BY catSort IS NULL, catSort ${dir}, catName, k, pinned DESC, sort ASC, cAsc ASC, cDesc ASC` :
+    `ORDER BY k ASC, pinned DESC, sort ASC, cAsc ASC, cDesc ASC`;
+  const args = q ? [like] : [];
+  const [rows, cnt] = await Promise.all([
+    prisma.$queryRawUnsafe<RawRow[]>(`SELECT id, kind, title, url, domain, categoryId, tags, CAST(createdAt AS INTEGER) AS createdAt, iconFile FROM (${base}) ${where} ${order} LIMIT ${limit} OFFSET ${offset}`, ...args),
+    prisma.$queryRawUnsafe<{ n: number | bigint }[]>(`SELECT COUNT(*) AS n FROM (${base}) ${where}`, ...args),
+  ]);
+  const out: AdminRow[] = rows.map((r) => ({
+    id: r.id,
+    kind: r.kind === "content" ? "content" : "site",
+    title: r.title,
+    url: r.url,
+    icon: iconFileUrl(r.iconFile),
+    domain: r.domain,
+    categoryId: r.categoryId,
+    tags: splitTags(r.tags).join(" · "),
+    date: new Date(Number(r.createdAt)).toISOString(),
+  }));
+  return { rows: out, total: Number(cnt[0]?.n ?? 0) };
 }

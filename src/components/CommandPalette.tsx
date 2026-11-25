@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { AppData } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { Modal } from "./ui/modal";
@@ -36,21 +36,40 @@ export function CommandPalette({ open, onClose, data, onOpenItem }: { open: bool
     }
   }, [open]);
 
+  // lower-cased search text, built once per data change while the palette is open (v0.4.0)
+  const index = useMemo(() => {
+    if (!open) return null;
+    const low = (...xs: string[]) => xs.join("\u0001").toLowerCase();
+    return {
+      sites: data.sites.map((x) => low(x.name, x.url, x.description)),
+      contents: data.contents.map((x) => low(x.title, x.summary, x.domain, x.tags.join(" "))),
+      monitors: data.monitors.map((x) => low(x.name, x.url, x.host, x.hostname)),
+    };
+  }, [open, data.sites, data.contents, data.monitors]);
+  const dq = useDeferredValue(q);
   const rows = useMemo<Row[]>(() => {
-    const s = q.trim().toLowerCase();
-    const has = (...xs: string[]) => !s || xs.some((x) => x.toLowerCase().includes(s));
+    const s = dq.trim().toLowerCase();
+    const max = s ? 60 : 24;
     const out: Row[] = [];
-    for (const x of data.sites)
-      if (has(x.name, x.url, x.description))
-        out.push({ key: "s" + x.id, group: "站点", title: x.name, sub: x.url.replace(/^https?:\/\//, ""), icon: <Tile src={x.icon} name={x.name} size="sm" />, run: () => window.open(x.url, "_blank", "noopener") });
-    for (const x of data.contents)
-      if (has(x.title, x.summary, x.domain, x.tags.join(" ")))
-        out.push({ key: "c" + x.id, group: "收藏", title: x.title, sub: `${x.domain}${x.tags.length ? " · #" + x.tags.join(" #") : ""}`, icon: <Tile src={x.icon} name={x.domain} size="sm" />, run: () => onOpenItem("content", x.id) });
-    for (const x of data.monitors)
-      if (has(x.name, x.url, x.host, x.hostname))
-        out.push({ key: "m" + x.id, group: "监控", title: x.name, sub: x.kind === "server" ? x.host : x.url, icon: <span className="p-type"><StatusDot status={x.status} /></span>, run: () => onOpenItem("monitor", x.id) });
-    return out.slice(0, s ? 60 : 24);
-  }, [q, data, onOpenItem]);
+    if (!index) return out;
+    const hit = (t: string) => !s || t.includes(s);
+    for (let i = 0; i < data.sites.length && out.length < max; i++) {
+      if (!hit(index.sites[i])) continue;
+      const x = data.sites[i];
+      out.push({ key: "s" + x.id, group: "站点", title: x.name, sub: x.url.replace(/^https?:\/\//, ""), icon: <Tile src={x.icon} name={x.name} size="sm" />, run: () => window.open(x.url, "_blank", "noopener") });
+    }
+    for (let i = 0; i < data.contents.length && out.length < max; i++) {
+      if (!hit(index.contents[i])) continue;
+      const x = data.contents[i];
+      out.push({ key: "c" + x.id, group: "收藏", title: x.title, sub: `${x.domain}${x.tags.length ? " · #" + x.tags.join(" #") : ""}`, icon: <Tile src={x.icon} name={x.domain} size="sm" />, run: () => onOpenItem("content", x.id) });
+    }
+    for (let i = 0; i < data.monitors.length && out.length < max; i++) {
+      if (!hit(index.monitors[i])) continue;
+      const x = data.monitors[i];
+      out.push({ key: "m" + x.id, group: "监控", title: x.name, sub: x.kind === "server" ? x.host : x.url, icon: <span className="p-type"><StatusDot status={x.status} /></span>, run: () => onOpenItem("monitor", x.id) });
+    }
+    return out;
+  }, [dq, index, data.sites, data.contents, data.monitors, onOpenItem]);
 
   useEffect(() => setSel(0), [q]);
   useEffect(() => {
@@ -80,7 +99,7 @@ export function CommandPalette({ open, onClose, data, onOpenItem }: { open: bool
         <kbd>Esc</kbd>
       </div>
       <div className="p-list" ref={listRef} role="listbox">
-        {rows.length === 0 && <p className="p-empty">没有找到「{q}」</p>}
+        {rows.length === 0 && index && <p className="p-empty">没有找到「{dq}」</p>}
         {rows.map((r, i) => {
           const head = r.group !== lastGroup ? <p className="p-group" key={r.key + "g"}>{r.group}</p> : null;
           lastGroup = r.group;
@@ -100,8 +119,8 @@ export function CommandPalette({ open, onClose, data, onOpenItem }: { open: bool
               >
                 {r.icon}
                 <span className="pt">
-                  <b>{highlight(r.title, q.trim())}</b>
-                  <small>{highlight(r.sub, q.trim())}</small>
+                  <b>{highlight(r.title, dq.trim())}</b>
+                  <small>{highlight(r.sub, dq.trim())}</small>
                 </span>
                 <span className="hint">↵ 打开</span>
               </button>
