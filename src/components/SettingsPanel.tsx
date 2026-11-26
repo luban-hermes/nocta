@@ -270,6 +270,7 @@ export function SettingsPanel({ tab, onTab }: { tab: SettingTab; onTab: (t: Sett
         <h4 className="set-h">
           备份列表
           <Button className="sm" loading={busy === "list"} onClick={() => run("list", loadBackups)}>刷新</Button>
+          <a className="btn sm" href="/api/backup/download" download>下载</a>
           <Button className="sm" variant="primary" disabled={!s3Configured} loading={busy === "now"} onClick={() => run("now", async () => { await api("/api/backup", { method: "POST" }); await loadBackups(); }, "备份完成")}>立即备份</Button>
         </h4>
         {backups?.last && (

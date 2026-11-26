@@ -1,11 +1,16 @@
 import "server-only";
 import { DeleteObjectCommand, GetObjectCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
-import { readdir, readFile, writeFile } from "node:fs/promises";
+import { createReadStream, createWriteStream } from "node:fs";
+import { mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
-import { gunzipSync, gzipSync } from "node:zlib";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import { createGzip, gunzipSync } from "node:zlib";
 import { prisma } from "./db";
 import { iconsDir } from "./icons";
 import { iconChanged } from "./iconver";
+import { ensureSortGaps } from "./sortgaps";
 import { DEFS, getInternal, getSettings, saveSettings, setInternal, type SettingKey, type Settings } from "./settings";
 
 /*
@@ -93,30 +98,73 @@ type Dump = {
   icons: Record<string, string>;
 };
 
-export async function buildDump(): Promise<Dump> {
+/*
+ * Streamed dump (v0.4.1): the JSON text is produced table by table, 500 rows at a time (keyset pages by id),
+ * and icon files one by one, so neither the rows nor the whole JSON string are ever held in memory at once.
+ * The bytes are exactly what JSON.stringify(dump) used to produce (same keys and order), so old and new
+ * backups restore the same way.
+ */
+type Pager = (args: { take: number; skip?: number; cursor?: { id: string }; orderBy: { id: "asc" } }) => Promise<{ id: string }[]>;
+const TABLES: [keyof Dump["data"], () => Pager][] = [
+  ["categories", () => prisma.category.findMany as unknown as Pager],
+  ["sites", () => prisma.site.findMany as unknown as Pager],
+  ["siteLinks", () => prisma.siteLink.findMany as unknown as Pager],
+  ["contents", () => prisma.content.findMany as unknown as Pager],
+  ["monitors", () => prisma.monitor.findMany as unknown as Pager],
+  ["checks", () => prisma.check.findMany as unknown as Pager],
+  ["metrics", () => prisma.metric.findMany as unknown as Pager],
+];
+const PAGE = 500;
+
+export async function* dumpChunks(): AsyncGenerator<string> {
   const s = await getSettings();
-  const [categories, sites, siteLinks, contents, monitors, checks, metrics] = await Promise.all([
-    prisma.category.findMany(),
-    prisma.site.findMany(),
-    prisma.siteLink.findMany(),
-    prisma.content.findMany(),
-    prisma.monitor.findMany(),
-    prisma.check.findMany(),
-    prisma.metric.findMany(),
-  ]);
-  const icons: Record<string, string> = {};
-  const used = new Set([...sites, ...contents].map((x) => x.iconFile).filter(Boolean));
-  for (const f of await readdir(iconsDir()).catch(() => [] as string[]))
-    if (used.has(f)) icons[f] = (await readFile(path.join(iconsDir(), f))).toString("base64");
-  return {
-    format: FORMAT,
-    version: VERSION,
-    createdAt: new Date().toISOString(),
-    settings: Object.fromEntries(PORTABLE.map((k) => [k, s[k]])),
-    data: { categories, sites, siteLinks, contents, monitors, checks, metrics },
-    icons,
-  };
+  const head = { format: FORMAT, version: VERSION, createdAt: new Date().toISOString(), settings: Object.fromEntries(PORTABLE.map((k) => [k, s[k]])) };
+  yield JSON.stringify(head).slice(0, -1) + ',"data":{';
+  const used = new Set<string>();
+  for (let t = 0; t < TABLES.length; t++) {
+    const [name, model] = TABLES[t];
+    yield `${t ? "," : ""}${JSON.stringify(name)}:[`;
+    let cursor: string | undefined, first = true;
+    for (;;) {
+      const rows = await model()({ take: PAGE, orderBy: { id: "asc" }, ...(cursor ? { skip: 1, cursor: { id: cursor } } : {}) });
+      if (!rows.length) break;
+      let part = "";
+      for (const r of rows) {
+        const icon = (r as { iconFile?: string }).iconFile;
+        if ((name === "sites" || name === "contents") && icon) used.add(icon);
+        part += (first ? "" : ",") + JSON.stringify(r);
+        first = false;
+      }
+      yield part;
+      cursor = rows[rows.length - 1].id;
+      if (rows.length < PAGE) break;
+    }
+    yield "]";
+  }
+  yield '},"icons":{';
+  let firstIcon = true;
+  for (const f of await readdir(iconsDir()).catch(() => [] as string[])) {
+    if (!used.has(f)) continue;
+    const b64 = (await readFile(path.join(iconsDir(), f))).toString("base64");
+    yield `${firstIcon ? "" : ","}${JSON.stringify(f)}:${JSON.stringify(b64)}`;
+    firstIcon = false;
+  }
+  yield "}}";
 }
+
+/** the whole dump as one object (kept for tests / tools; backups themselves are streamed) */
+export async function buildDump(): Promise<Dump> {
+  let text = "";
+  for await (const c of dumpChunks()) text += c;
+  return JSON.parse(text) as Dump;
+}
+
+/** gzip'd backup stream (for downloads) */
+export function backupStream() {
+  return Readable.from(dumpChunks(), { objectMode: false }).pipe(createGzip({ level: 9 }));
+}
+
+export const backupFileName = (trigger?: string) => `nocta-backup-${stamp()}${trigger === "pre-restore" ? "-pre-restore" : ""}.json.gz`;
 
 const stamp = (d = new Date()) => d.toISOString().replace(/[-:]/g, "").replace("T", "-").slice(0, 15);
 
@@ -137,21 +185,31 @@ export async function runBackup(trigger: "manual" | "scheduled" | "pre-restore" 
   g.__noctaBackupBusy = true;
   const s = await getSettings();
   try {
-    const dump = await buildDump();
-    const body = gzipSync(Buffer.from(JSON.stringify(dump)), { level: 9 });
-    const key = `${prefixOf(s)}nocta-backup-${stamp()}${trigger === "pre-restore" ? "-pre-restore" : ""}.json.gz`;
-    const s3 = client(s);
+    if (!s3Ready(s)) client(s); // throws the "fill in S3 first" message before any work
+    // stream rows → JSON → gzip → temp file, then upload the file as a stream with a known length
+    // (PutObject needs Content-Length; no multipart dependency, nothing large in memory)
+    const dir = await mkdtemp(path.join(tmpdir(), "nocta-backup-"));
+    const file = path.join(dir, "backup.json.gz");
+    let size = 0;
+    const key = `${prefixOf(s)}${backupFileName(trigger)}`;
     try {
-      await s3.send(new PutObjectCommand({ Bucket: s.s3Bucket, Key: key, Body: body, ContentType: "application/gzip", Metadata: { "nocta-format": `${FORMAT}-v${VERSION}`, trigger } }));
-      await prune(s3, s);
-    } catch (e) {
-      throw s3Error(e);
+      await pipeline(Readable.from(dumpChunks(), { objectMode: false }), createGzip({ level: 9 }), createWriteStream(file));
+      size = (await stat(file)).size;
+      const s3 = client(s);
+      try {
+        await s3.send(new PutObjectCommand({ Bucket: s.s3Bucket, Key: key, Body: createReadStream(file), ContentLength: size, ContentType: "application/gzip", Metadata: { "nocta-format": `${FORMAT}-v${VERSION}`, trigger } }));
+        await prune(s3, s);
+      } catch (e) {
+        throw s3Error(e);
+      } finally {
+        s3.destroy();
+      }
     } finally {
-      s3.destroy();
+      await rm(dir, { recursive: true, force: true }).catch(() => {});
     }
-    const st = { at: new Date().toISOString(), ok: true, key, size: body.length, trigger };
+    const st = { at: new Date().toISOString(), ok: true, key, size, trigger };
     await recordStatus(st);
-    console.log(`[nocta] backup ${trigger}: ${key} (${(body.length / 1024).toFixed(1)} KB)`);
+    console.log(`[nocta] backup ${trigger}: ${key} (${(size / 1024).toFixed(1)} KB)`);
     return st;
   } catch (e) {
     await recordStatus({ at: new Date().toISOString(), ok: false, error: e instanceof Error ? e.message : String(e), trigger });
@@ -247,6 +305,7 @@ export async function restoreBackup(key: string) {
   iconChanged();
   const portable = Object.fromEntries(Object.entries(dump.settings ?? {}).filter(([k]) => (PORTABLE as string[]).includes(k) && k in DEFS));
   if (Object.keys(portable).length) await saveSettings(portable);
+  await ensureSortGaps().catch(() => {});
   console.log(`[nocta] restored ${key}`, stats);
   return stats;
 }

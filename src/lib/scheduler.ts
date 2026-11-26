@@ -5,6 +5,7 @@ import { checkMonitor } from "./monitor";
 import { ensureDefaultCategories } from "./bookmarks";
 import { backfillIcons } from "./icons";
 import { runScheduledBackup } from "./backup";
+import { ensureSortGaps } from "./sortgaps";
 
 const TICK_MS = 5000;
 const CONCURRENCY = 6;
@@ -49,6 +50,11 @@ export async function startScheduler() {
     await ensureDefaultCategories();
   } catch (e) {
     console.error("[nocta] could not prepare default categories (did migrations run?)", e);
+  }
+  try {
+    await ensureSortGaps();
+  } catch (e) {
+    console.error("[nocta] could not space out the sort order", e);
   }
   // icons for bookmarks created before the icon cache existed (runs in the background)
   setTimeout(() => void backfillIcons(), 3000);

@@ -5,7 +5,7 @@ import type { ContentDTO, MonitorDTO, SiteDTO, Tick } from "@/lib/types";
 import { ago, fmtRate } from "@/lib/client";
 import { cn } from "@/lib/utils";
 import { ArrowDownIcon, ArrowUpIcon, PinIcon, PlayIcon, SparkIcon, WarnIcon } from "./Icons";
-import { useLongPress } from "./ui/context-menu";
+import { cancelDrag, useLongPress } from "./ui/context-menu";
 import { mergeHandlers, type HandleProps } from "./ui/sortable";
 import { linkState, openSite, siteLinks, useProbes, watchLinks } from "@/lib/linkprobe";
 
@@ -22,12 +22,12 @@ function useImgFallback(src?: string) {
   return { ref, broken, onError: () => setBroken(true) };
 }
 
-export function Tile({ src, name, size }: { src?: string; name: string; size?: "sm" | "xs" | "lg" }) {
+export function Tile({ src, name, size, eager }: { src?: string; name: string; size?: "sm" | "xs" | "lg"; /** already decoded (⌘K rows): paint it in the same frame as the row */ eager?: boolean }) {
   const { ref, broken, onError } = useImgFallback(src);
   const letter = (name.trim()[0] ?? "?").toUpperCase();
   return (
     <span className={cn("tile", size, src && !broken && "has-img")}>
-      {src && !broken ? <img ref={ref} src={src} alt="" loading="lazy" decoding="async" draggable={false} onError={onError} /> : <span className="tl">{letter}</span>}
+      {src && !broken ? <img ref={ref} src={src} alt="" loading={eager ? "eager" : "lazy"} decoding={eager ? "sync" : "async"} draggable={false} onError={onError} /> : <span className="tl">{letter}</span>}
     </span>
   );
 }
@@ -101,6 +101,7 @@ export const SiteCard = memo(function SiteCard({ site, index, handle, onMenu, me
         onPointerMove={move}
         onPointerLeave={() => setHot(false)}
         onContextMenu={(e) => {
+          cancelDrag();
           if (!onMenu) return;
           e.preventDefault();
           setHot(false);
@@ -161,6 +162,7 @@ export const ContentCard = memo(function ContentCard({ c, index, onOpen, open, h
       role="button"
       aria-label={c.title}
       onContextMenu={(e) => {
+        cancelDrag();
         if (!onMenu) return;
         e.preventDefault();
         onMenu(e.clientX, e.clientY);

@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/db";
 import { requireAdmin } from "@/lib/auth";
 import { body, fail, json } from "@/lib/http";
+import { SORT_GAP } from "@/lib/sortgaps";
 
 /*
  * Persist a drag-and-drop move.
@@ -8,10 +9,11 @@ import { body, fail, json } from "@/lib/http";
  *  - sites / contents (v0.4.0): { kind, id, after, before } — `after` / `before` are the item's new neighbours
  *    in the list the user was looking at (either may be null). Only the moved row is updated: it gets a `sort`
  *    between its neighbour and the next item, using gaps of 1024. When there is no gap left, the other rows are
- *    renumbered once in a single SQL statement and the new values are returned as `sorts`.
+ *    renumbered once in a single SQL statement and the new values are returned as `sorts`. Since v0.4.1 the gaps
+ *    are backfilled at start-up and after a restore (lib/sortgaps.ts), so this fallback is rare.
  *  - any kind (categories): { kind, ids } — the complete new order; each item's `sort` becomes its index.
  */
-const GAP = 1024;
+const GAP = SORT_GAP;
 type Row = { id: string; pinned: number | boolean; sort: number | bigint; createdAt: number | bigint };
 const n = (x: number | bigint) => Number(x);
 

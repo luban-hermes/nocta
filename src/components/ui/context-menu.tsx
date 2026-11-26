@@ -154,6 +154,10 @@ function MenuView({ state, onClose }: { state: NonNullable<MenuState>; onClose: 
 
 /** shared with the sortable lists: is a drag running right now? */
 export const dragState = { active: false };
+/** a lifted card is put back when its context menu opens (long-press, or Android's native contextmenu on a held link) */
+export function cancelDrag() {
+  if (dragState.active) document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true }));
+}
 
 /**
  * long-press on touch screens: hold still ~0.5s → `cb(x, y)`. Moving the finger first (scroll, or a
@@ -170,7 +174,7 @@ export function useLongPress(cb: ((x: number, y: number) => void) | null, ms = 5
       st.current = { x: t.clientX, y: t.clientY, fired: false };
       st.current.t = setTimeout(() => {
         st.current.fired = true;
-        if (dragState.active) document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true }));
+        cancelDrag();
         navigator.vibrate?.(8);
         cb(st.current.x, st.current.y);
       }, ms);

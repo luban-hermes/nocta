@@ -62,6 +62,9 @@ a{color:inherit;text-decoration:none}
 .x-drift canvas{position:absolute;inset:0;width:100%;height:100%}
 .light #sky{opacity:0;visibility:hidden}
 @keyframes skyDrift{from{transform:translate3d(-12px,7px,0)}to{transform:translate3d(12px,-7px,0)}}
+/* v0.4.1: the starfield tick drives the drifts and the orb ring (see Starfield.tsx) */
+.sky-js .x-drift,.sky-js .nebula{animation:none}
+.sky-js .orb::after,.sky-js .orb i{animation:none;transform:rotate(var(--orb,0deg))}
 .vignette{position:absolute;inset:0;background:radial-gradient(ellipse at 50% 0%,transparent 45%,var(--bg) 100%);opacity:.6}
 
 /* glass: blur only on top bar, drawer and modals */

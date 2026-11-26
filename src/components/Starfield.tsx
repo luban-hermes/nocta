@@ -18,8 +18,13 @@ type Shoot = { t0: number; dur: number; x: number; y: number; vx: number; vy: nu
 
 /**
  * Realistic night sky: a static layer (power-law field stars + a faint Milky Way with dust lanes) is rendered
- * once; ~20 bright stars scintillate on a dirty-rect overlay; rare shooting stars. DPR capped at 1.5,
- * paused while the tab is hidden or the light theme is on. Drift and parallax are CSS transforms only.
+ * once; ~16 bright stars scintillate on a dirty-rect overlay; rare shooting stars. DPR capped at 1.5.
+ *
+ * v0.4.1: every slow decoration of the page (sky drift, nebula drift, the brand orb's ring) is advanced by this
+ * one ~15 fps tick instead of infinite CSS animations — a running CSS animation makes the compositor produce
+ * (and, without a GPU, rasterise and re-blur under the glass bars) 60 frames a second forever. The tick pauses
+ * while the page scrolls, while a modal covers it, while the tab is hidden, and never runs with reduced motion.
+ * Without JS (or with reduced motion) the CSS animations stay in charge (html.sky-js switches them off).
  */
 export function Starfield() {
   const skyRef = useRef<HTMLDivElement>(null);
@@ -45,7 +50,8 @@ export function Starfield() {
       return c;
     });
     const pickCol = (u: number) => (u < 0.5 ? 1 : u < 0.82 ? 0 : u < 0.93 ? 2 : u < 0.985 ? 3 : 4);
-    let W = 0, H = 0, dpr = 1, built = false, light = false, raf = 0, lastT = 0, nextShoot = 0;
+    let W = 0, H = 0, dpr = 1, built = false, light = false, raf = 0, lastT = 0, nextShoot = 0, clock = 0, scrollUntil = 0;
+    const root = document.documentElement, drift = sky.firstElementChild as HTMLElement, nebula = sky.parentElement!.querySelector(".nebula") as HTMLElement | null;
     let twk: Twinkler[] = [];
     let shoot: Shoot | null = null;
     let shootBox: [number, number, number, number] | null = null;
@@ -118,7 +124,7 @@ export function Starfield() {
         field.push({ x: r() * W, y: r() * H, s: pickCol(r()), rad: bright ? 1.2 + r() * 0.3 : 0.4 + 0.8 * mag, a: bright ? 0.85 + r() * 0.15 : 0.12 + 0.78 * Math.pow(mag, 0.65) });
       }
       field.sort((p, q) => q.a * q.rad - p.a * p.rad);
-      const nt = Math.max(15, Math.min(25, Math.round(n / 45)));
+      const nt = Math.max(12, Math.min(16, Math.round(n / 70)));
       twk = field.slice(0, nt).map((p) => {
         const h = p.rad * 5 * (p.rad > 1.1 ? 1.5 : 0.5) + 2;
         return { ...p, box: [p.x - h, p.y - h, h * 2, h * 2], f1: 6.2832 / (3500 + r() * 5500), f2: 6.2832 / (1700 + r() * 2600), p1: r() * 6.28, p2: r() * 6.28 };
@@ -184,23 +190,55 @@ export function Starfield() {
         shootBox = [Math.min(hx, tx) - 3, Math.min(hy, ty) - 3, Math.abs(hx - tx) + 6, Math.abs(hy - ty) + 6];
       }
     }
+    /* the former CSS keyframes, same paths and periods (ease-in-out, alternate) */
+    const ease = (p: number) => {
+      const u = p % 2 < 1 ? p % 2 : 2 - (p % 2);
+      return 0.5 - 0.5 * Math.cos(Math.PI * u);
+    };
+    let orbs: NodeListOf<HTMLElement> | null = null, orbsAt = -1e9;
+    // a style write is a full-screen composite: the drifts are written only when they moved a visible step
+    let lastDrift = "", lastNeb = "";
+    function decorate(t: number) {
+      const d = ease(clock / 360000), nb = ease(clock / 90000);
+      const q = (v: number, step: number) => (Math.round(v / step) * step).toFixed(2);
+      const dr = `translate3d(${q(-12 + 24 * d, 0.5)}px,${q(7 - 14 * d, 0.5)}px,0)`;
+      if (dr !== lastDrift) drift.style.transform = lastDrift = dr;
+      if (nebula) {
+        const nt = `translate3d(${q(-0.12 * innerWidth * nb, 1)}px,${q(0.06 * innerHeight * nb, 1)}px,0)`;
+        if (nt !== lastNeb) nebula.style.transform = lastNeb = nt;
+      }
+      if (t - orbsAt > 2000) {
+        orbs = document.querySelectorAll<HTMLElement>(".orb");
+        orbsAt = t;
+      }
+      const deg = ((clock / 6000) * 360) % 360;
+      orbs?.forEach((o) => o.style.setProperty("--orb", deg.toFixed(1) + "deg"));
+    }
     function loop(t: number) {
       raf = requestAnimationFrame(loop);
-      if (t - lastT < 50 && !shoot) return; // ~20fps is plenty for scintillation
+      const dt = t - lastT;
+      if (dt < 64 && !shoot) return; // ~15 fps is plenty for scintillation (periods of 2–9 s) and the slow drifts
       lastT = t;
-      draw(t);
+      // frozen while scrolling (each frame would be one more full-screen composite) or under a modal's scrim
+      if (t < scrollUntil || document.body.classList.contains("x-modal-open")) return;
+      clock += Math.min(dt, 100);
+      decorate(t);
+      if (!light) draw(t);
     }
     const start = () => {
-      if (!raf && !reduce && !light && !document.hidden) raf = requestAnimationFrame(loop);
+      if (reduce) return;
+      root.classList.add("sky-js");
+      if (!raf && !document.hidden) raf = requestAnimationFrame(loop);
     };
     const stop = () => {
       cancelAnimationFrame(raf);
       raf = 0;
     };
+    const onScroll = () => (scrollUntil = performance.now() + 180);
+    addEventListener("scroll", onScroll, { passive: true });
     const theme = () => {
-      light = document.documentElement.classList.contains("light");
-      if (light) return stop();
-      if (!built) size();
+      light = root.classList.contains("light");
+      if (!light && !built) size();
       start();
     };
     nextShoot = performance.now() + 12000 + Math.random() * 14000;
@@ -235,6 +273,8 @@ export function Starfield() {
     if (parallax) addEventListener("pointermove", onMove, { passive: true });
     return () => {
       stop();
+      root.classList.remove("sky-js");
+      removeEventListener("scroll", onScroll);
       mo.disconnect();
       document.removeEventListener("visibilitychange", onVis);
       removeEventListener("resize", onResize);

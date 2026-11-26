@@ -13,7 +13,7 @@ import { ContextMenu, type MenuItem, type MenuState } from "./ui/context-menu";
 import { SortItem, SortList, type HandleProps } from "./ui/sortable";
 import { ContentCard, LinkDot, LinkLatency, MonitorCard, SiteCard } from "./Cards";
 import { Drawer, type DrawerTarget } from "./Drawer";
-import { CommandPalette } from "./CommandPalette";
+import { CommandPalette, prefetchSearch } from "./CommandPalette";
 import { AddDialog } from "./AddDialog";
 import { Assistant } from "./Assistant";
 import { ArrowUpIcon, CatIcon, CopyIcon, EditIcon, ExternalIcon, LinkIcon, MoveIcon, OpenIcon, PinIcon, PinOffIcon, PlusIcon, RefreshIcon, SearchIcon, TrashIcon } from "./Icons";
@@ -136,6 +136,8 @@ function App({ initial }: { initial: AppData }) {
   const admin = data.admin;
   const dataRef = useRef(data);
   dataRef.current = data;
+  const tabRef = useRef(tab);
+  tabRef.current = tab;
 
   /* ---------- data: first view from the server, full lists after hydration, then only what changed (v0.4.0) ---------- */
   const ver = useRef<Versions | undefined>(initial.version);
@@ -175,10 +177,12 @@ function App({ initial }: { initial: AppData }) {
       if (r.monitors) setData((d) => ({ ...d, monitors: r.monitors! }));
       const v = ver.current, p = dataRef.current.partial;
       const jobs: Promise<void>[] = [];
-      if (!v || r.version.k !== v.k) jobs.push(loadList("category"), loadList("site"), loadList("content")); // deleting a category un-files its items
+      // the contents list is only downloaded once the 收藏内容 tab has been opened (v0.4.1)
+      const wantContents = !p?.contents || tabRef.current === "contents";
+      if (!v || r.version.k !== v.k) jobs.push(loadList("category"), loadList("site"), ...(wantContents ? [loadList("content")] : [])); // deleting a category un-files its items
       else {
         if (p?.sites || r.version.s !== v.s) jobs.push(loadList("site"));
-        if (p?.contents || r.version.c !== v.c) jobs.push(loadList("content"));
+        if (wantContents && (p?.contents || r.version.c !== v.c)) jobs.push(loadList("content"));
       }
       await Promise.all(jobs);
       ver.current = r.version;
@@ -198,13 +202,8 @@ function App({ initial }: { initial: AppData }) {
   }, []);
 
   useEffect(() => {
+    // the sites list is being looked at; contents wait for their tab, ⌘K asks the server (v0.4.1)
     if (initial.partial?.sites) void loadList("site");
-    if (initial.partial?.contents) {
-      const ric = (window as unknown as { requestIdleCallback?: (f: () => void, o?: { timeout: number }) => number }).requestIdleCallback;
-      const go = () => void loadList("content");
-      if (ric) ric(go, { timeout: 1500 });
-      else setTimeout(go, 300);
-    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -223,12 +222,9 @@ function App({ initial }: { initial: AppData }) {
   }, [tab, refresh]);
 
   useEffect(() => {
-    if (palette) void loadAll();
-  }, [palette, loadAll]);
-
-  useEffect(() => {
     setIsMac(/Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent));
     const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Meta" || e.key === "Control") prefetchSearch();
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
         setPalette((v) => !v);
@@ -254,6 +250,7 @@ function App({ initial }: { initial: AppData }) {
   }, [chat, drawer]);
 
   const openItem = useCallback((type: "content" | "monitor", id: string) => {
+    if (type === "content" && dataRef.current.partial?.contents) void loadList("content");
     setTab(type === "content" ? "contents" : "monitors");
     setDrawer({ type, id });
     if (type === "content") {
@@ -262,7 +259,7 @@ function App({ initial }: { initial: AppData }) {
       setCat((cc) => (cc.contents === "all" || cc.contents === (c?.categoryId ?? "none") ? cc : { ...cc, contents: "all" }));
       setJump((j) => ({ id, n: (j?.n ?? 0) + 1 }));
     }
-  }, []);
+  }, [loadList]);
 
   const siteCats = useMemo(() => data.categories.filter((c) => c.kind === "site"), [data.categories]);
   const contentCats = useMemo(() => data.categories.filter((c) => c.kind === "content"), [data.categories]);
@@ -314,6 +311,10 @@ function App({ initial }: { initial: AppData }) {
     down: data.monitors.filter((m) => m.status === "down").length,
   };
 
+  /** intent: the pointer is on the 收藏内容 tab — start its download before the click */
+  const prefetchContents = () => {
+    if (dataRef.current.partial?.contents) void loadList("content");
+  };
   const switchTab = (t: Tab) => {
     setTab(t);
     if (t === "contents") void loadAll();
@@ -515,7 +516,7 @@ function App({ initial }: { initial: AppData }) {
           <span>夜航书签</span>
           <span className="brand-tag">Nocta</span>
         </Link>
-        <button className="search-pill" onClick={() => setPalette(true)} aria-label="搜索">
+        <button className="search-pill" onClick={() => setPalette(true)} onPointerEnter={prefetchSearch} onPointerDown={prefetchSearch} onFocus={prefetchSearch} aria-label="搜索">
           <SearchIcon size={16} />
           <span className="sp-l">搜索站点、收藏和监控…</span>
           <span className="sp-s">搜索</span>
@@ -539,7 +540,7 @@ function App({ initial }: { initial: AppData }) {
         <div className="x-tabbar">
           <div className="x-tabs" role="tablist" aria-label="切换视图" id="tabs" style={{ gridTemplateColumns: `repeat(${tabs.length},1fr)`, width: `min(${tabs.length * 200}px,100%)` }}>
             {tabs.map((t) => (
-              <button key={t.id} className="x-tab" role="tab" aria-selected={tab === t.id} tabIndex={tab === t.id ? 0 : -1} onClick={() => switchTab(t.id)}>
+              <button key={t.id} className="x-tab" role="tab" aria-selected={tab === t.id} tabIndex={tab === t.id ? 0 : -1} onClick={() => switchTab(t.id)} onPointerEnter={t.id === "contents" ? prefetchContents : undefined} onTouchStart={t.id === "contents" ? prefetchContents : undefined} onFocus={t.id === "contents" ? prefetchContents : undefined}>
                 {tab === t.id && <motion.span layoutId="tab-pill" className="tab-pill" transition={{ type: "spring", stiffness: 420, damping: 36 }} />}
                 {t.label} <span className="x-tab__n">{t.n}</span>
               </button>
@@ -610,7 +611,7 @@ function App({ initial }: { initial: AppData }) {
 
       <ContextMenu state={menu} onClose={closeMenu} />
       <Drawer target={drawer} data={data} onClose={() => setDrawer(null)} refresh={refresh} />
-      <CommandPalette open={palette} onClose={() => setPalette(false)} data={data} onOpenItem={openItem} />
+      <CommandPalette open={palette} onClose={() => setPalette(false)} monitors={data.monitors} onOpenItem={openItem} />
       {admin && <AddDialog open={adding} onClose={() => setAdding(false)} refresh={refresh} onAdded={onAdded} aiEnabled={data.aiEnabled} />}
       <Assistant open={chat} setOpen={setChat} admin={admin} aiEnabled={data.aiEnabled} refresh={refresh} onOpenItem={openItem} />
     </>
